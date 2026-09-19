@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lesson 0001: State Before Autonomy</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+  <p class="eyebrow">Lesson 0001 · 15 minutes</p>
+  <h1>State before autonomy</h1>
+  <p class="lead">Your first LangGraph program has no LLM. That constraint makes the machinery visible: state enters, nodes return updates, and edges decide what runs next.</p>
+
+  <section class="card concept">
+    <strong>The central distinction</strong><br>
+    A workflow follows control flow you define. An agent lets a model dynamically choose some of that control flow. Both need observable state and explicit boundaries.
+  </section>
+
+  <h2>Read the graph</h2>
+  <div class="flow" aria-label="Graph flow">
+    <div class="node">request</div><div class="arrow">→</div>
+    <div class="node">normalize</div><div class="arrow">→</div>
+    <div class="node">triage</div>
+  </div>
+  <div class="flow" aria-label="Conditional branches">
+    <div class="node">answer</div><div class="arrow">← specific · vague →</div>
+    <div class="node">clarify</div><div class="arrow">→</div>
+    <div class="node">end</div>
+  </div>
+  <p>The graph state is a typed contract. Each node reads the current state and returns an update. The conditional edge reads <code>route</code> and selects the next node. No hidden control flow is required.</p>
+
+  <h2>Prediction exercise</h2>
+  <p>Without running the code, write the expected <code>route</code>, <code>response</code>, and <code>audit_log</code> for each input:</p>
+  <ol>
+    <li><code>Help</code></li>
+    <li><code>Explain LangGraph state</code></li>
+    <li><code>&nbsp; design&nbsp;&nbsp; a router &nbsp;</code></li>
+  </ol>
+  <p>Then run:</p>
+  <pre><code>uv sync
+uv run first-graph "Help"
+uv run first-graph "Explain LangGraph state"
+uv run first-graph "  design  a router  "</code></pre>
+
+  <details>
+    <summary>Check your model</summary>
+    <p><code>Help</code> has fewer than three words and routes to clarification. The other requests normalize to three words and route to answer. Every audit log begins with <code>normalize</code>, continues with the route decision, and ends with the selected action.</p>
+  </details>
+
+  <h2>Make one change</h2>
+  <p>Replace the word-count rule with a rule you can justify. For example, require both an action verb and an object. Add one test that would fail under the old rule and pass under yours.</p>
+
+  <h2>Exit check</h2>
+  <ul class="check">
+    <li>I can distinguish graph state from conversational memory.</li>
+    <li>I can point to where routing is decided.</li>
+    <li>I can explain why this is a workflow, not yet an agent.</li>
+    <li>I changed a policy and captured it in a test.</li>
+  </ul>
+
+  <h2>Primary source</h2>
+  <p>Read the official <a href="https://docs.langchain.com/oss/python/langgraph/graph-api">LangGraph Graph API overview</a>, focusing on state, nodes, and edges. Stop when the examples move beyond concepts used here.</p>
+
+  <footer>
+    Next: add a model-controlled tool loop and contrast it with this deterministic graph. Ask your teaching agent about anything that remains unclear before moving on. See the <a href="../reference/agent-system-map.html">agent system map</a> for the vocabulary in context.
+  </footer>
+</main>
+</body>
+</html>
+

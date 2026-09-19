@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reference: Agent System Map</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+  <p class="eyebrow">Reference · print-friendly</p>
+  <h1>Agent system map</h1>
+  <p class="lead">A compact map of the layers in this course. Use it to avoid treating patterns, frameworks, and protocols as interchangeable.</p>
+
+  <h2>One system, four layers</h2>
+  <div class="card"><strong>1. Reasoning and control patterns</strong><br>ReAct alternates reasoning and action. A router chooses a branch. Reflection critiques or revises an output. Planning decomposes work before or during execution.</div>
+  <div class="card"><strong>2. Runtime and application framework</strong><br>LangChain supplies common model, message, tool, retrieval, and agent abstractions. LangGraph makes state transitions, branches, loops, persistence, and interruptions explicit.</div>
+  <div class="card"><strong>3. Interoperability protocols</strong><br>MCP standardizes how an AI application connects to tools and context. A2A standardizes how independent agents discover capabilities and collaborate on tasks.</div>
+  <div class="card"><strong>4. Operational controls</strong><br>Evaluations, traces, permissions, approval gates, timeouts, budgets, audit logs, and incident procedures make behavior governable.</div>
+
+  <h2>State is not memory</h2>
+  <table>
+    <thead><tr><th>Term</th><th>Practical meaning</th><th>Typical lifetime</th></tr></thead>
+    <tbody>
+      <tr><td>State</td><td>Data needed to execute the current graph</td><td>One run or thread</td></tr>
+      <tr><td>Short-term memory</td><td>Conversation and working context retained across turns</td><td>One thread</td></tr>
+      <tr><td>Long-term memory</td><td>Selected information persisted and retrieved later</td><td>Across threads</td></tr>
+      <tr><td>Knowledge</td><td>External source material retrieved for grounding</td><td>Independent of a user thread</td></tr>
+    </tbody>
+  </table>
+
+  <h2>MCP is not A2A</h2>
+  <div class="card concept"><strong>MCP equips an agent.</strong> Think agent-to-tool or application-to-context. <strong>A2A connects autonomous services.</strong> Think agent-to-agent discovery, delegation, task lifecycle, and artifacts.</div>
+
+  <h2>Production questions</h2>
+  <ul class="check">
+    <li>What decisions are deterministic, model-selected, or human-approved?</li>
+    <li>What state is persisted, for how long, and under whose identity?</li>
+    <li>Can every tool call be authorized, bounded, traced, and retried safely?</li>
+    <li>How do we detect unsupported claims and explain consequential outputs?</li>
+    <li>What happens on timeout, partial failure, duplicate delivery, or restart?</li>
+    <li>Does adding another agent improve measured quality enough to justify cost?</li>
+  </ul>
+
+  <footer>Return to <a href="../lessons/0001-state-before-autonomy.html">Lesson 0001</a>. Ask your teaching agent to unpack any distinction that is still fuzzy.</footer>
+</main>
+</body>
+</html>
