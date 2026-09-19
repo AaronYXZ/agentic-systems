@@ -45,11 +45,11 @@ uv run first-graph "  design  a router  "</code></pre>
 
   <details>
     <summary>Check your model</summary>
-    <p><code>Help</code> has fewer than three words and routes to clarification. The other requests normalize to three words and route to answer. Every audit log begins with <code>normalize</code>, continues with the route decision, and ends with the selected action.</p>
+    <p><code>Help</code> names neither an accepted action nor an object, so it routes to clarification. The other requests start with the accepted actions <code>explain</code> and <code>design</code> and include meaningful objects, so they route to answer. Every audit log begins with <code>normalize</code>, continues with the route decision, and ends with the selected action.</p>
   </details>
 
   <h2>Make one change</h2>
-  <p>Replace the word-count rule with a rule you can justify. For example, require both an action verb and an object. Add one test that would fail under the old rule and pass under yours.</p>
+  <p>Add one justified action verb to the routing policy. Then add a test showing a request with that action and an object is accepted, while the action alone still asks for clarification.</p>
 
   <h2>Exit check</h2>
   <ul class="check">
@@ -68,4 +68,3 @@ uv run first-graph "  design  a router  "</code></pre>
 </main>
 </body>
 </html>
-

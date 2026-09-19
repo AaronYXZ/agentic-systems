@@ -4,9 +4,27 @@ This is intentionally not an autonomous agent. It teaches the control plane befo
 an LLM is added to it.
 """
 
+import re
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+
+ACTION_VERBS = frozenset(
+    {
+        "analyze",
+        "build",
+        "calculate",
+        "compare",
+        "create",
+        "debug",
+        "design",
+        "explain",
+        "review",
+        "summarize",
+        "test",
+    }
+)
+OBJECT_FILLERS = frozenset({"a", "an", "please", "the"})
 
 
 class TriageState(TypedDict):
@@ -27,10 +45,18 @@ def normalize(state: TriageState) -> dict[str, object]:
 
 
 def choose_route(state: TriageState) -> dict[str, object]:
-    """Route underspecified requests to clarification."""
-    request = state["normalized_request"]
+    """Require an explicit action and a meaningful object before proceeding."""
+    tokens = re.findall(
+        r"[a-z0-9]+(?:[-_][a-z0-9]+)*",
+        state["normalized_request"].lower(),
+    )
+    if tokens[:1] == ["please"]:
+        tokens = tokens[1:]
+
+    has_action = bool(tokens) and tokens[0] in ACTION_VERBS
+    has_object = any(token not in OBJECT_FILLERS for token in tokens[1:])
     route: Literal["answer", "clarify"] = (
-        "answer" if len(request.split()) >= 3 else "clarify"
+        "answer" if has_action and has_object else "clarify"
     )
     return {
         "route": route,
@@ -90,4 +116,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

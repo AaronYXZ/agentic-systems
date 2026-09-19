@@ -23,3 +23,9 @@ def test_request_is_normalized_before_routing():
     assert result["normalized_request"] == "explain agent state"
     assert result["route"] == "answer"
 
+
+def test_two_word_action_and_object_is_specific_enough():
+    """The old three-word threshold incorrectly sent this to clarification."""
+    result = run("Explain state")
+
+    assert result["route"] == "answer"
