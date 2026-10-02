@@ -1,4 +1,4 @@
-"""V1 job data and contracts for the remaining file tools."""
+"""V1 job record and project-local data paths."""
 
 from pathlib import Path
 from typing import TypedDict
@@ -25,23 +25,3 @@ class JobPosting(TypedDict):
     description: str
     skills: list[str]
     url: str
-
-
-def read_resume() -> str:
-    """Return the complete UTF-8 text from ``data/resume.md``.
-
-    A missing or empty file must return ``Error: Resume is missing or empty.``
-    Reading must not expose a traceback or unrelated filesystem details.
-    """
-    raise NotImplementedError("read_resume is planned for Step 4")
-
-
-def save_results(content: str) -> str:
-    """Append requested recommendations to ``data/results.md``.
-
-    Content must be nonblank and identify catalog jobs by stable ID. Return
-    which IDs were saved and which were skipped as duplicates. Invalid content
-    must return ``Error: Provide job IDs and recommendation text to save.`` A
-    write failure must return ``Error: Results could not be saved.``
-    """
-    raise NotImplementedError("save_results is planned for Step 5")

@@ -2,12 +2,11 @@
 
 This is an installable Python project for the V1 CLI job search agent described
 in [V1_DEVELOPMENT_PLAN.md](V1_DEVELOPMENT_PLAN.md). Its importable package is
-`openai_agent_sdk`. The agent and tool implementations are planned for later
-steps.
+`openai_agent_sdk`. The agent and CLI are planned for later steps.
 
-The fictional catalog is in `data/jobs.json`. Step 3 implements deterministic
-mock search in `openai_agent_sdk/tools/search_jobs.py`. Resume reading and
-saving still raise `NotImplementedError` until Steps 4 and 5.
+The fictional catalog is in `data/jobs.json`. Its three local tools now search
+mock jobs, read a resume, and save selected recommendations. They can be called
+without an API key or an agent.
 
 ### Requirements
 
@@ -54,3 +53,21 @@ Search reads only the versioned mock catalog. It matches any meaningful query
 word in a job's title, location, description, or skills, ignoring case and
 common request words. Results keep catalog order and are labeled `mock`.
 These are fictional records, not current job openings.
+
+### Resume and saved results
+
+`read_resume` returns the exact UTF-8 text from `data/resume.md`. A missing or
+empty file produces an actionable error. The file is ignored by Git.
+
+`save_results` accepts one recommendation per line, in this format:
+
+```text
+job-001: Strong match for ranking systems experience.
+job-002: Relevant LLM application experience.
+```
+
+Each ID must exist in the mock catalog. The tool validates the entire request
+before appending to `data/results.md`, adds a UTC timestamp, and skips IDs
+already saved. It reports saved and skipped IDs. The results file is ignored by
+Git. Step 6 will require explicit user save intent before the agent calls this
+tool.

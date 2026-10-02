@@ -22,6 +22,11 @@ deterministically, and returns complete catalog records labeled as mock data.
 Seven local search tests pass without an API key. Repository Ruff and pytest
 checks also pass.
 
+Steps 4 and 5 now implement local resume reading and duplicate-safe saving.
+`save_results` accepts one `job-ID: recommendation` line per job and validates
+all IDs before writing. Tests use temporary files only. The agent's explicit
+save-intent rule remains part of Step 6.
+
 This folder is a self-contained learning project directed by
 `agent_codex_plan.md`. V1 uses the OpenAI Agents SDK and stays intentionally
 small and local.
