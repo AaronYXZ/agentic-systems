@@ -1,0 +1,2 @@
+# Install this package and its dependencies in editable mode.
+-e .

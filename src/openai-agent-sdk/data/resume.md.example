@@ -1,0 +1,27 @@
+# Fictional Candidate Resume
+
+This profile is fictional. Copy it to `resume.md` and replace it with your own
+information before running the job search agent.
+
+## Summary
+
+Python software engineer with experience building search and recommendation
+systems. Interested in machine learning engineering roles.
+
+## Skills
+
+- Python, SQL, and data pipelines
+- Ranking models and offline evaluation
+- LLM application development and prompt evaluation
+
+## Experience
+
+### Software Engineer, Example Company
+
+- Built a product search service using Python and SQL.
+- Evaluated ranking changes with offline relevance metrics.
+- Added automated checks for data quality and service reliability.
+
+## Location
+
+San Francisco Bay Area. Open to hybrid roles.

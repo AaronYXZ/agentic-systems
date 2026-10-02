@@ -1,0 +1,47 @@
+[
+  {
+    "id": "job-001",
+    "title": "Machine Learning Engineer, Ranking",
+    "company": "Fictional Search Co",
+    "location": "San Francisco, CA",
+    "description": "Build and evaluate ranking models for product search.",
+    "skills": ["Python", "SQL", "ranking", "offline evaluation"],
+    "url": "https://example.com/jobs/job-001"
+  },
+  {
+    "id": "job-002",
+    "title": "LLM Application Engineer",
+    "company": "Example AI Studio",
+    "location": "Oakland, CA",
+    "description": "Develop LLM applications and evaluate prompt and tool behavior.",
+    "skills": ["Python", "LLMs", "prompt evaluation", "APIs"],
+    "url": "https://example.com/jobs/job-002"
+  },
+  {
+    "id": "job-003",
+    "title": "Data Platform Engineer",
+    "company": "Sample Data Works",
+    "location": "San Jose, CA",
+    "description": "Maintain data pipelines and quality checks for analytics teams.",
+    "skills": ["Python", "SQL", "data pipelines", "data quality"],
+    "url": "https://example.com/jobs/job-003"
+  },
+  {
+    "id": "job-004",
+    "title": "Recommendation Systems Engineer",
+    "company": "Demo Commerce",
+    "location": "Remote, US",
+    "description": "Improve recommendation quality through experiments and relevance metrics.",
+    "skills": ["Python", "recommendation systems", "experimentation"],
+    "url": "https://example.com/jobs/job-004"
+  },
+  {
+    "id": "job-005",
+    "title": "Backend Software Engineer",
+    "company": "Placeholder Cloud",
+    "location": "Seattle, WA",
+    "description": "Build reliable Python services and APIs for internal products.",
+    "skills": ["Python", "APIs", "service reliability"],
+    "url": "https://example.com/jobs/job-005"
+  }
+]
