@@ -2,7 +2,8 @@
 
 This is an installable Python project for the V1 CLI job search agent described
 in [V1_DEVELOPMENT_PLAN.md](V1_DEVELOPMENT_PLAN.md). Its importable package is
-`openai_agent_sdk`. The agent and CLI are planned for later steps.
+`openai_agent_sdk`. Its single agent is in `openai_agent_sdk.agent`. The
+interactive CLI is planned for Step 7.
 
 The fictional catalog is in `data/jobs.json`. Its three local tools now search
 mock jobs, read a resume, and save selected recommendations. They can be called
@@ -13,8 +14,7 @@ without an API key or an agent.
 - Python 3.10 or newer. The setup below uses Python 3.13 to match the parent
   course project.
 - `uv` for creating the environment and installing dependencies.
-- An OpenAI API key for future model-backed runs. No key is needed to verify
-  this bootstrap step.
+- An OpenAI API key for real agent runs. Deterministic tests need no key.
 
 ### Setup
 
@@ -28,9 +28,8 @@ cp .env.example .env
 cp data/resume.md.example data/resume.md
 ```
 
-Add your key to `.env` before a later step makes an API call.
-`OPENAI_MODEL` sets the model for that future agent. The CLI has not been built
-yet.
+Add your key to `.env` before running the agent. `OPENAI_MODEL` selects its
+model. The CLI has not been built yet.
 
 ### Check the installation
 
@@ -69,5 +68,23 @@ job-002: Relevant LLM application experience.
 Each ID must exist in the mock catalog. The tool validates the entire request
 before appending to `data/results.md`, adds a UTC timestamp, and skips IDs
 already saved. It reports saved and skipped IDs. The results file is ignored by
-Git. Step 6 will require explicit user save intent before the agent calls this
-tool.
+Git. The agent allows this write only when the current user message explicitly
+asks to save.
+
+### Run the agent from Python
+
+``` python
+from openai_agent_sdk.agent import run_agent
+
+first = run_agent("Find Bay Area machine learning roles related to ranking")
+print(first.text)
+
+second = run_agent("Save the first result", history=first.history)
+print(second.text)
+```
+
+`run_agent` uses the OpenAI Agents SDK runner with a bounded number of model
+turns. It returns the final text and replay-ready history for follow-up
+requests. The versioned instructions live in
+`openai_agent_sdk/prompts/system.md`. SDK tracing is disabled for this local V1.
+The tests use a scripted model and make no real API calls.

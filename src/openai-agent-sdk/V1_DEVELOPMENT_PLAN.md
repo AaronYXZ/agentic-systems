@@ -2,7 +2,8 @@
 
 ### Status
 
-Planning only. No application code has been written.
+Steps 1 through 6 are implemented. The interactive CLI and final V1 runbook
+remain in Steps 7 and 8.
 
 Step 1 was completed on 2026-10-02. `uv` created a local Python 3.13 virtual
 environment and installed `openai-agents` 0.23.1 and `python-dotenv` 1.2.4.
@@ -11,8 +12,7 @@ checks passed with `uv run ruff check .` and `uv run pytest` (15 tests).
 
 Step 2 now has the fictional job catalog, path definitions, typed job record,
 and callable tool signatures. No tests were added or run during Step 2, as
-requested. `read_resume` and `save_results` remain placeholders for Steps 4
-and 5.
+requested. The three tool implementations followed in Steps 3 through 5.
 
 The project now has its own `pyproject.toml` and an importable
 `openai_agent_sdk` package. The outer project folder keeps its hyphenated name.
@@ -24,8 +24,12 @@ checks also pass.
 
 Steps 4 and 5 now implement local resume reading and duplicate-safe saving.
 `save_results` accepts one `job-ID: recommendation` line per job and validates
-all IDs before writing. Tests use temporary files only. The agent's explicit
-save-intent rule remains part of Step 6.
+all IDs before writing. Tests use temporary files only.
+
+Step 6 adds one SDK agent with a versioned prompt, exactly three tools, local
+history replay, and an eight-turn limit. A per-turn save gate requires clear
+user intent before the save tool can write. Scripted-model tests exercise the
+real SDK loop without an API key. A live model run remains part of Step 8.
 
 This folder is a self-contained learning project directed by
 `agent_codex_plan.md`. V1 uses the OpenAI Agents SDK and stays intentionally
@@ -78,8 +82,11 @@ src/openai-agent-sdk/
 ├── openai_agent_sdk/
 │   ├── __init__.py
 │   ├── contracts.py
+│   ├── catalog.py
 │   ├── agent.py
 │   ├── cli.py
+│   ├── prompts/
+│   │   └── system.md
 │   └── tools/
 │       ├── __init__.py
 │       ├── search_jobs.py
@@ -89,8 +96,6 @@ src/openai-agent-sdk/
 │   ├── jobs.json
 │   ├── resume.md
 │   └── results.md
-├── prompts/
-│   └── system.md
 ├── tests/
 │   ├── test_search_jobs.py
 │   ├── test_read_resume.py
