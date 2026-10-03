@@ -18,6 +18,12 @@ from openai_agent_sdk.agent import (
 )
 
 
+@pytest.fixture(autouse=True)
+def default_to_mock_provider(monkeypatch):
+    """Keep scripted-model tests independent of a developer's local .env."""
+    monkeypatch.setenv("JOB_SEARCH_PROVIDER", "mock")
+
+
 def _call(name: str, arguments: dict[str, str], call_id: str):
     return ResponseFunctionToolCall(
         arguments=json.dumps(arguments),
@@ -77,6 +83,28 @@ def test_agent_registers_only_three_tools_and_loads_versioned_prompt():
     ]
     assert agent.tools[2].params_json_schema["required"] == ["content"]
     assert "fictional mock data" in agent.instructions
+
+
+def test_jsearch_mode_keeps_three_tools_and_blocks_live_saving(tmp_path):
+    results = tmp_path / "results.md"
+
+    def report_denial(items):
+        assert "Saving live jobs is not supported yet" in repr(items)
+        return [_answer("I could not save that live job.")]
+
+    model = ScriptedModel(
+        [
+            [_call("save_results", {"content": "jsearch:abc: Good fit."}, "save-1")],
+            report_denial,
+        ]
+    )
+    agent = build_agent(model=model, provider="jsearch", results_path=results)
+
+    assert len(agent.tools) == 3
+    assert "JSearch mode is active" in agent.instructions
+    turn = run_agent("Save this job", agent=agent)
+    assert turn.text == "I could not save that live job."
+    assert not results.exists()
 
 
 def test_model_name_comes_from_environment(monkeypatch):

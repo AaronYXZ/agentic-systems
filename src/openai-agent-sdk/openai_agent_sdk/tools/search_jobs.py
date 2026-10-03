@@ -2,10 +2,12 @@
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from openai_agent_sdk.catalog import load_catalog
 from openai_agent_sdk.contracts import JOBS_PATH
+from openai_agent_sdk.jsearch import JSearchError, search_jsearch
 
 _SEARCH_FIELDS = ("title", "location", "description")
 _REQUEST_WORDS = frozenset(
@@ -21,7 +23,14 @@ def _terms(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.casefold())) - _REQUEST_WORDS
 
 
-def search_jobs(query: str, *, catalog_path: Path = JOBS_PATH) -> str:
+def search_jobs(
+    query: str,
+    *,
+    catalog_path: Path = JOBS_PATH,
+    provider: str = "mock",
+    api_key: str = "",
+    live_search: Callable[..., dict[str, object]] = search_jsearch,
+) -> str:
     """Return complete mock jobs matching any meaningful query term.
 
     Matching is case-insensitive across title, location, description, and
@@ -30,6 +39,15 @@ def search_jobs(query: str, *, catalog_path: Path = JOBS_PATH) -> str:
     """
     if not query.strip():
         return "Error: Search query cannot be empty."
+
+    if provider == "jsearch":
+        try:
+            result = live_search(query, api_key=api_key)
+        except JSearchError as exc:
+            return f"Error: {exc}"
+        return json.dumps(result, ensure_ascii=False)
+    if provider != "mock":
+        return "Error: Unsupported job search provider."
 
     jobs = load_catalog(catalog_path)
     if jobs is None:

@@ -1,13 +1,13 @@
 # Job Search Agent, OpenAI Agents SDK
 
-This is an installable Python project for the V1 CLI job search agent described
-in [V1_DEVELOPMENT_PLAN.md](V1_DEVELOPMENT_PLAN.md). Its importable package is
+This is an installable Python project for the job search agent described
+in [development_plan.md](development_plan.md). Its importable package is
 `openai_agent_sdk`. Its single agent is in `openai_agent_sdk.agent`. The
 interactive CLI is in `openai_agent_sdk.cli`.
 
-The fictional catalog is in `data/jobs.json`. Its three local tools now search
-mock jobs, read a resume, and save selected recommendations. They can be called
-without an API key or an agent.
+The fictional catalog is in `data/jobs.json`. By default, the agent searches
+mock jobs, reads a resume, and can save selected mock recommendations. V2
+Steps 1–3 add an opt-in JSearch adapter. Live-job saving is not supported yet.
 
 ### Requirements
 
@@ -30,6 +30,32 @@ cp data/resume.md.example data/resume.md
 
 Add your key to `.env` before running the agent. `OPENAI_MODEL` selects its
 model. Use only a model available to your OpenAI account.
+
+### Optional live job search
+
+To search JSearch through RapidAPI, subscribe to the
+[JSearch API](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch), then set
+these values in the ignored `.env` file:
+
+```text
+JOB_SEARCH_PROVIDER=jsearch
+JSEARCH_API_KEY=your-key
+```
+
+The agent still sees only `search_jobs(query: str)`. The adapter sends one
+JSearch search request with an eight-second timeout and returns at most ten
+normalized records. Results include their source and UTC retrieval time. A
+missing key, provider error, or malformed response is reported as an error;
+the tool does not silently substitute fictional jobs. Search uses one request
+and no automatic retry. The provider may charge for API calls. These results
+are not an exhaustive market view, and retrieval does not prove a posting is
+still open. The live API path has not been manually acceptance-tested.
+
+Use `JOB_SEARCH_PROVIDER=mock` to return to the deterministic local catalog.
+`save_results` remains limited to mock catalog IDs. In JSearch mode, even an
+explicit save request returns a clear unsupported-operation error. This keeps
+the existing write validation intact until live job identity and duplicate
+handling are implemented in later V2 steps.
 
 ### Run the interactive CLI
 

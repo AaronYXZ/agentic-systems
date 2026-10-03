@@ -71,16 +71,28 @@ def build_agent(
     catalog_path: Path = JOBS_PATH,
     resume_path: Path = RESUME_PATH,
     results_path: Path = RESULTS_PATH,
+    provider: str | None = None,
+    jsearch_api_key: str | None = None,
 ) -> Agent[JobAgentContext]:
-    """Register exactly three SDK tools over the local Python operations."""
+    """Register three SDK tools with mock or opt-in JSearch search."""
+    load_dotenv(PROJECT_ROOT / ".env")
     if model is None:
-        load_dotenv(PROJECT_ROOT / ".env")
         model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
+    selected_provider = (
+        provider or os.getenv("JOB_SEARCH_PROVIDER", "mock")
+    ).strip().lower()
+    selected_key = jsearch_api_key if jsearch_api_key is not None else os.getenv(
+        "JSEARCH_API_KEY", ""
+    )
 
     @function_tool
     def search_jobs(query: str) -> str:
-        """Search fictional job records by role, skill, or location."""
-        return search_mock_jobs(query, catalog_path=catalog_path)
+        """Search jobs by role, skill, or location using the configured source."""
+        return search_mock_jobs(
+            query, catalog_path=catalog_path,
+            provider=selected_provider,
+            api_key=selected_key,
+        )
 
     @function_tool
     def read_resume() -> str:
@@ -92,13 +104,20 @@ def build_agent(
         """Save catalog job IDs and recommendation text only on user request."""
         if not ctx.context.save_allowed:
             return "Error: Saving requires an explicit request in the current message."
+        if selected_provider != "mock":
+            return "Error: Saving live jobs is not supported yet."
         return save_results_file(
             content, results_path=results_path, catalog_path=catalog_path
         )
 
     return Agent(
         name="Job Search Agent",
-        instructions=load_instructions(),
+        instructions=load_instructions() + (
+            "\nJSearch mode is active. These are provider results, not fictional mock "
+            "data. Report the source and retrieval time. Do not claim jobs are "
+            "still open. Saving live jobs is not supported yet.\n"
+            if selected_provider == "jsearch" else ""
+        ),
         model=model,
         tools=[search_jobs, read_resume, save_results],
     )

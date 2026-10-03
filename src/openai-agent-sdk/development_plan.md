@@ -1,4 +1,4 @@
-# OpenAI Agents SDK Job Search Agent: V1 Development Plan
+# OpenAI Agents SDK Job Search Agent: Development Plan
 
 ### Status
 
@@ -116,7 +116,7 @@ src/openai-agent-sdk/
 ├── pyproject.toml
 ├── requirements.txt
 ├── uv.lock
-└── V1_DEVELOPMENT_PLAN.md
+└── development_plan.md
 ```
 
 The exact test split may be simplified during implementation if fewer files
@@ -394,17 +394,212 @@ run with a configured key.
 - [x] Core tool tests do not require an API key.
 - [x] Secrets, personal resume data, and generated results are not committed.
 - [x] The local README contains complete setup and run instructions.
-- [x] V2 features have not been introduced.
+- [x] V1 mock behavior remains available alongside opt-in V2 search.
 - [x] Repository quality checks pass.
 
-### Deferred until V1 passes
+### Milestone gate
 
-The following remain unplanned implementation work until every V1 acceptance
-item passes:
+V2 Steps 1 through 3 are implemented with JSearch as an opt-in source. V2
+Steps 4 through 8 and all V3 steps remain plans. Complete the remaining
+live V1 acceptance checks before replacing the mock search path. Keep the V1
+deterministic tests as regression tests. A possible V4 long-running agent is
+not planned here. FastAPI, deployment, notifications, and background
+scheduling are not V2 or V3 work.
 
-- real job search providers;
-- structured ranking and filtering improvements;
-- SQLite persistence;
-- scheduled or long-running execution;
-- web interfaces and deployment;
-- MCP or multi-agent orchestration.
+### V2. Real Tools
+
+Outcome: replace mock search with real job/search APIs while keeping one
+agent, an interactive CLI, and explicit user control of writes. V2 adds
+structured job objects, filtering, resume/JD matching, better deduplication,
+and tool tracing. A live provider must not be described as a complete view of
+the job market.
+
+#### V2 Step 1. Select a real source and define its boundary
+
+Status: implemented. JSearch is the first adapter because the current agent
+accepts broad keyword searches such as remote Python jobs. TheirStack is a
+candidate for more complex company, seniority, and date combinations.
+Greenhouse and Lever are candidates for a later company-shortlist workflow.
+Those sources are not integrated. Provider pricing, access terms, and quotas
+must be checked against the current provider account before a live run.
+
+JSearch uses the RapidAPI-hosted endpoint, an ignored API key, one request,
+an eight-second timeout, and no automatic retry. Missing credentials,
+authorization failure, rate limit, network failure, and malformed responses
+produce explicit errors. A fake response is used in tests. No real API call
+was made during implementation.
+
+Redacted example of the provider fields accepted by the adapter:
+
+```json
+{
+  "data": {"jobs": [{
+    "job_id": "example-id",
+    "job_title": "Python Engineer",
+    "employer_name": "Example Co",
+    "job_location": "Remote, US",
+    "job_description": "Build Python services.",
+    "job_apply_link": "https://example.com/apply",
+    "job_posted_at_datetime_utc": "2026-10-01T12:00:00Z"
+  }], "cursor": "example-next-page-token"}
+}
+```
+
+- Compare candidate job/search APIs for access, terms, rate limits, fields,
+  freshness, and testability. Choose one provider for the first adapter.
+- Keep credentials in ignored environment configuration. Define timeouts,
+  retry limits, and a clear response when the provider is unavailable.
+- Exit evidence: a documented provider choice, a redacted sample response,
+  and a deterministic fake for tests. No live key is needed for unit tests.
+
+#### V2 Step 2. Define structured job objects
+
+Status: implemented. `LiveJobPosting` is the normalized shape. The adapter
+rejects missing required fields, invalid field types, and non-HTTP URLs.
+Location, posting date, and employment type are explicitly nullable. Tests
+cover valid, missing-optional, and malformed records.
+
+- Add a typed job object with provider, provider job ID, canonical URL, title,
+  company, location, description, posting date when available, and retrieval
+  time. Mark optional or missing fields explicitly.
+- Normalize provider responses at the boundary. Reject malformed records
+  rather than passing raw provider text to the agent as trusted facts.
+- Exit evidence: fixture tests map valid, missing-field, and malformed API
+  responses into a stable internal schema.
+
+#### V2 Step 3. Replace mock search behind a provider adapter
+
+Status: implemented for search only. `search_jobs(query: str)` remains the
+model-facing contract. `JOB_SEARCH_PROVIDER=jsearch` selects the live adapter;
+mock remains the default and offline fixture. The adapter limits the response
+to ten jobs, adds source and retrieval time, and does not fall back to mock on
+provider failure. Fake-adapter tests pass. A live integration run remains
+unverified. Saving live IDs is deferred until identity and deduplication rules
+are completed.
+
+- Make `search_jobs` call the selected adapter while keeping its tool contract
+  clear to the model. Preserve the mock catalog as an offline test fixture.
+- Bound result count and latency. Report source and retrieval time with each
+  result, and surface provider errors without inventing jobs.
+- Exit evidence: the same search contract passes with a fake adapter; one
+  separately marked integration check can exercise the real API.
+
+#### V2 Step 4. Add deterministic filtering
+
+- Filter structured jobs by explicit user criteria such as location, remote
+  preference, role, and required skills. Separate hard exclusions from
+  preferences that can affect ranking.
+- Show which criteria removed each job. Do not let the model silently change
+  hard filters or claim a missing field passed a filter.
+- Exit evidence: table-driven tests cover matching, missing fields, and
+  conflicting criteria before model-backed ranking is added.
+
+#### V2 Step 5. Match resumes to job descriptions
+
+- Extract evidence from the local resume and each job description. Keep source
+  excerpts or field references so fit claims can be checked.
+- Use deterministic requirements checks where possible; use the model only
+  for interpretation and explanation. State gaps as uncertainty, not as
+  invented candidate experience.
+- Exit evidence: evaluation cases include strong fit, weak fit, missing
+  resume evidence, and misleading job text. Recommendations cite both sides.
+
+#### V2 Step 6. Improve job deduplication
+
+- Prefer provider ID and canonical URL for identity. Add a conservative
+  fallback for equivalent titles, companies, and locations across sources.
+- Keep distinct openings separate when identity is uncertain, and record why
+  two records were considered duplicates.
+- Exit evidence: tests cover repeated pages, URL variants, reposts, and
+  same-title but distinct jobs without collapsing valid openings.
+
+#### V2 Step 7. Add safe tool tracing
+
+- Record each tool name, call ID, duration, outcome, source, and error class.
+  Make SDK tracing an explicit, configurable choice instead of assuming it is
+  enabled in the V1 CLI.
+- Do not log API keys, full resume text, or unrestricted job descriptions.
+  Define a retention and redaction rule before persisting traces.
+- Exit evidence: one search and one tool failure produce inspectable traces
+  with matching call IDs and no secrets or personal resume content.
+
+#### V2 Step 8. Verify the real-tool flow
+
+- Run unit tests offline, a marked live integration test with a user-provided
+  key, and the repository quality checks. Review API costs and failure modes.
+- Manually confirm that results identify their source and time, filters are
+  respected, fit claims are grounded, and saving still needs explicit intent.
+- Exit evidence: the README has setup and acceptance instructions; V1 mock
+  tests and V2 tests pass. Defer persistence and scheduling to later stages.
+
+### V3. Persistent State
+
+Outcome: add local SQLite storage for `jobs`, `searches`, `recommendations`,
+and `agent_runs`. Persist previously seen jobs and agent history so the CLI
+can resume without treating a new process as a new user. No scheduler,
+notifications, web service, or deployment belongs in V3.
+
+#### V3 Step 1. Define the database schema and migrations
+
+- Specify primary keys, foreign keys, unique constraints, UTC timestamps,
+  and schema versions for the four tables. Keep provider IDs and canonical
+  URLs where available; define how missing identifiers are handled.
+- Store replay-ready agent history in `agent_runs` or an explicitly related
+  record, with a documented serialization format and version.
+- Exit evidence: a new database migrates from empty, and a second migration
+  run makes no duplicate tables or data.
+
+#### V3 Step 2. Persist jobs and searches
+
+- Insert normalized job objects and record each search query, filters,
+  provider, retrieval time, outcome, and job references.
+- Upsert repeat sightings without losing the first-seen time; update the
+  last-seen time and current provider fields deliberately.
+- Exit evidence: repeated searches preserve one stable job identity and a
+  separate record of each search attempt.
+
+#### V3 Step 3. Track previously seen jobs
+
+- Classify search results as new, previously seen, or uncertain duplicates
+  using V2 identity rules and stored sightings.
+- Keep the agent's shortlist grounded in the current result set while
+  allowing it to explain that a job was seen before.
+- Exit evidence: a second search in a new process identifies prior jobs
+  without hiding distinct openings.
+
+#### V3 Step 4. Persist recommendations and save decisions
+
+- Link each recommendation to a job and the run that produced it. Record fit
+  evidence, saved status, and timestamps without duplicating a saved job.
+- Make validation and writes transactional. Keep the explicit save gate
+  outside the model and report skipped duplicates.
+- Exit evidence: repeated saves and interrupted writes leave one consistent
+  recommendation record per intended save.
+
+#### V3 Step 5. Persist agent runs and conversation history
+
+- Record conversation ID, run ID, start and end time, status, model identifier,
+  redacted error details, and replay-ready history. Choose one continuation
+  method: local replay or an SDK session. Do not mix both in one conversation.
+- Define retention, deletion, and access rules for stored resume-derived
+  content. Keep the database out of Git.
+- Exit evidence: a follow-up request after a process restart uses the prior
+  conversation once, without duplicated history items.
+
+#### V3 Step 6. Add a narrow storage layer and recovery path
+
+- Put SQL and transactions behind typed repository functions. Keep tools and
+  CLI independent from table details.
+- Handle locked or corrupt databases with actionable errors. Avoid silently
+  discarding history or overwriting existing records.
+- Exit evidence: temporary-database tests cover migration, rollback,
+  restart, duplicate records, and storage failure.
+
+#### V3 Step 7. Verify persistence end to end
+
+- Run the CLI, search and save, exit, restart, and request a follow-up.
+  Inspect the four tables and compare them with the visible conversation.
+- Run offline tests and repository quality checks. Document database location,
+  backup, privacy, and reset procedures before declaring V3 complete.
+- Exit evidence: new and seen jobs, recommendations, searches, and run
+  history survive restart. No V4 background process has been introduced.

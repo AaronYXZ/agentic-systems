@@ -25,3 +25,19 @@ class JobPosting(TypedDict):
     description: str
     skills: list[str]
     url: str
+
+
+class LiveJobPosting(TypedDict):
+    """Normalized provider record. Missing optional data is explicit."""
+
+    id: str
+    provider: str
+    provider_job_id: str
+    url: str
+    title: str
+    company: str
+    location: str | None
+    description: str
+    posted_at: str | None
+    retrieved_at: str
+    employment_type: str | None
