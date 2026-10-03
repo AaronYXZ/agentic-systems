@@ -16,6 +16,8 @@ from openai_agent_sdk.agent import (
     explicit_save_requested,
     run_agent,
 )
+from openai_agent_sdk.jsearch import normalize_job
+from openai_agent_sdk.tools import search_jobs as search_jobs_file
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +87,7 @@ def test_agent_registers_only_three_tools_and_loads_versioned_prompt():
     assert "fictional mock data" in agent.instructions
 
 
-def test_jsearch_mode_keeps_three_tools_and_blocks_live_saving(tmp_path):
+def test_jsearch_mode_adds_fit_tool_and_blocks_live_saving(tmp_path):
     results = tmp_path / "results.md"
 
     def report_denial(items):
@@ -100,11 +102,94 @@ def test_jsearch_mode_keeps_three_tools_and_blocks_live_saving(tmp_path):
     )
     agent = build_agent(model=model, provider="jsearch", results_path=results)
 
-    assert len(agent.tools) == 3
+    assert [tool.name for tool in agent.tools] == [
+        "search_jobs", "read_resume", "save_results", "assess_fit"
+    ]
     assert "JSearch mode is active" in agent.instructions
     turn = run_agent("Save this job", agent=agent)
     assert turn.text == "I could not save that live job."
     assert not results.exists()
+
+
+def test_live_agent_search_filters_then_checks_fit_with_local_evidence(
+    tmp_path, monkeypatch
+):
+    resume = tmp_path / "resume.md"
+    resume.write_text(
+        "Built Python services.\nUsed SQL for analysis.", encoding="utf-8"
+    )
+    stamp = "2026-10-03T00:00:00+00:00"
+
+    def job(job_id, remote):
+        return normalize_job({
+            "job_id": job_id,
+            "job_title": "Python Engineer",
+            "employer_name": "Example Co",
+            "job_location": "Chicago, IL",
+            "job_country": "US",
+            "job_is_remote": remote,
+            "job_description": "Requirements: Python and SQL experience.",
+            "job_apply_link": f"https://example.com/{job_id}",
+        }, stamp)
+
+    def fake_provider(_query, *, api_key, country, remote_only):
+        assert api_key == "test-key"
+        assert country == "us"
+        assert remote_only is True
+        return {"source": "jsearch", "retrieved_at": stamp,
+                "jobs": [job("keep", True), job("keep", True),
+                         job("exclude", False)]}
+
+    def search_with_fake(query, **kwargs):
+        return search_jobs_file(query, live_search=fake_provider, **kwargs)
+
+    monkeypatch.setattr("openai_agent_sdk.agent.search_job_records", search_with_fake)
+
+    def after_search(items):
+        observed = repr(items)
+        assert "jsearch:keep" in observed
+        assert "remote status is not confirmed true" in observed
+        assert "provider_id" in observed
+        return [_call("assess_fit", {"job_id": "jsearch:keep"}, "fit-1")]
+
+    def after_fit(items):
+        observed = repr(items)
+        assert "Built Python services." in observed
+        assert "Requirements: Python and SQL experience." in observed
+        return [_answer(
+            'jsearch:keep. Job: "Requirements: Python and SQL experience." '
+            'Resume: "Built Python services." and "Used SQL for analysis."'
+        )]
+
+    model = ScriptedModel([
+        [_call("search_jobs", {"query": "Python engineer"}, "search-1")],
+        after_search,
+        after_fit,
+    ])
+    agent = build_agent(
+        model=model, provider="jsearch", jsearch_api_key="test-key",
+        resume_path=resume,
+    )
+
+    turn = run_agent("Find remote Python jobs in the US", agent=agent)
+
+    assert "Requirements: Python and SQL experience." in turn.text
+    assert "Built Python services." in turn.text
+
+
+def test_live_fit_requires_a_job_searched_this_turn(tmp_path):
+    def after_error(items):
+        assert "Search for this live job in the current turn first" in repr(items)
+        return [_answer("Search first.")]
+
+    model = ScriptedModel([
+        [_call("assess_fit", {"job_id": "jsearch:unknown"}, "fit-1")],
+        after_error,
+    ])
+    agent = build_agent(model=model, provider="jsearch",
+                        resume_path=tmp_path / "missing.md")
+
+    assert run_agent("Does this job fit?", agent=agent).text == "Search first."
 
 
 def test_model_name_comes_from_environment(monkeypatch):

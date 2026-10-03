@@ -41,3 +41,5 @@ class LiveJobPosting(TypedDict):
     posted_at: str | None
     retrieved_at: str
     employment_type: str | None
+    is_remote: bool | None
+    country: str | None

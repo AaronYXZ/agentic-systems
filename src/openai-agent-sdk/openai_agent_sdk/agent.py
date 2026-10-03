@@ -1,8 +1,9 @@
-"""One OpenAI Agents SDK agent over three deterministic local tools."""
+"""One OpenAI Agents SDK agent over local job search tools."""
 
+import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
@@ -17,10 +18,18 @@ from agents import (
 )
 from dotenv import load_dotenv
 
-from .contracts import JOBS_PATH, PROJECT_ROOT, RESULTS_PATH, RESUME_PATH
+from .contracts import (
+    JOBS_PATH,
+    PROJECT_ROOT,
+    RESULTS_PATH,
+    RESUME_PATH,
+    LiveJobPosting,
+)
+from .filtering import SearchCriteria, parse_criteria
+from .matching import assess_fit as assess_live_fit
 from .tools import read_resume as read_resume_file
 from .tools import save_results as save_results_file
-from .tools import search_jobs as search_mock_jobs
+from .tools import search_jobs as search_job_records
 
 MAX_TURNS = 8
 _SAVE_VERB = r"(?:save|store|bookmark)"
@@ -38,11 +47,13 @@ _SAVE_NEGATION = re.compile(
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class JobAgentContext:
     """Per-turn permission that local code does not expose to the model."""
 
     save_allowed: bool
+    criteria: SearchCriteria = SearchCriteria()
+    searched_jobs: dict[str, LiveJobPosting] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,13 +97,18 @@ def build_agent(
     )
 
     @function_tool
-    def search_jobs(query: str) -> str:
+    def search_jobs(ctx: RunContextWrapper[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
-        return search_mock_jobs(
+        output = search_job_records(
             query, catalog_path=catalog_path,
             provider=selected_provider,
             api_key=selected_key,
+            criteria=ctx.context.criteria,
         )
+        if selected_provider == "jsearch" and not output.startswith("Error:"):
+            parsed = json.loads(output)
+            ctx.context.searched_jobs.update({job["id"]: job for job in parsed["jobs"]})
+        return output
 
     @function_tool
     def read_resume() -> str:
@@ -110,16 +126,36 @@ def build_agent(
             content, results_path=results_path, catalog_path=catalog_path
         )
 
+    @function_tool
+    def assess_fit(ctx: RunContextWrapper[JobAgentContext], job_id: str) -> str:
+        """Check a searched job against local resume evidence, without guessing."""
+        job = ctx.context.searched_jobs.get(job_id)
+        if job is None:
+            return "Error: Search for this live job in the current turn first."
+        resume = read_resume_file(resume_path=resume_path)
+        if resume.startswith("Error:"):
+            return resume
+        return json.dumps(assess_live_fit(job, resume), ensure_ascii=False)
+
     return Agent(
         name="Job Search Agent",
         instructions=load_instructions() + (
             "\nJSearch mode is active. These are provider results, not fictional mock "
             "data. Report the source and retrieval time. Do not claim jobs are "
-            "still open. Saving live jobs is not supported yet.\n"
+            "still open. The search tool applies user-owned hard filters and "
+            "reports exclusions and duplicate reasons. Never claim an excluded "
+            "job passed a filter. Wait for search_jobs to return, then call "
+            "assess_fit on each job before making a candidate-fit claim. If "
+            "asked about an earlier job, search again in this turn. Treat unverified "
+            "skills as missing evidence, not absent skills. A strong status "
+            "covers checked skills only, not the whole job. Saving live jobs "
+            "is not supported yet.\n"
             if selected_provider == "jsearch" else ""
         ),
         model=model,
-        tools=[search_jobs, read_resume, save_results],
+        tools=[search_jobs, read_resume, save_results] + (
+            [assess_fit] if selected_provider == "jsearch" else []
+        ),
     )
 
 
@@ -136,6 +172,7 @@ def run_agent(
     if max_turns < 1:
         raise ValueError("max_turns must be at least 1.")
 
+    criteria = parse_criteria(user_message)
     turn_input: list[TResponseInputItem] = [
         *(history or []),
         {"role": "user", "content": user_message},
@@ -143,7 +180,9 @@ def run_agent(
     result = Runner.run_sync(
         agent or build_agent(),
         turn_input,
-        context=JobAgentContext(save_allowed=explicit_save_requested(user_message)),
+        context=JobAgentContext(
+            save_allowed=explicit_save_requested(user_message), criteria=criteria
+        ),
         max_turns=max_turns,
         run_config=RunConfig(tracing_disabled=True),
     )

@@ -1,12 +1,16 @@
-"""Search the versioned mock job catalog without a model or network call."""
+"""Search the mock catalog or opt-in live provider without a model."""
 
 import json
 import re
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 
 from openai_agent_sdk.catalog import load_catalog
-from openai_agent_sdk.contracts import JOBS_PATH
+from openai_agent_sdk.contracts import JOBS_PATH, LiveJobPosting
+from openai_agent_sdk.deduplication import deduplicate_jobs
+from openai_agent_sdk.filtering import SearchCriteria, filter_jobs
 from openai_agent_sdk.jsearch import JSearchError, search_jsearch
 
 _SEARCH_FIELDS = ("title", "location", "description")
@@ -30,6 +34,7 @@ def search_jobs(
     provider: str = "mock",
     api_key: str = "",
     live_search: Callable[..., dict[str, object]] = search_jsearch,
+    criteria: SearchCriteria | None = None,
 ) -> str:
     """Return complete mock jobs matching any meaningful query term.
 
@@ -41,10 +46,36 @@ def search_jobs(
         return "Error: Search query cannot be empty."
 
     if provider == "jsearch":
+        applied_criteria = criteria or SearchCriteria()
+        provider_query = query.strip()
+        if (applied_criteria.role and
+                applied_criteria.role.casefold() not in provider_query.casefold()):
+            provider_query += f" {applied_criteria.role}"
+        location = applied_criteria.location
+        if (location and location.casefold() not in {"us", "usa", "united states"}
+                and location.casefold() not in provider_query.casefold()):
+            provider_query += f" in {location}"
         try:
-            result = live_search(query, api_key=api_key)
+            result = live_search(
+                provider_query,
+                api_key=api_key,
+                country=("us" if applied_criteria.location and
+                         applied_criteria.location.casefold() in
+                         {"us", "usa", "united states"} else None),
+                remote_only=applied_criteria.remote_only,
+            )
         except JSearchError as exc:
             return f"Error: {exc}"
+        if not isinstance(result.get("jobs"), list):
+            return "Error: Job search returned an invalid response."
+        filtered = filter_jobs(
+            cast(list[LiveJobPosting], result["jobs"]), applied_criteria
+        )
+        deduplicated = deduplicate_jobs(filtered["jobs"])
+        result["jobs"] = deduplicated["jobs"]
+        result["criteria"] = asdict(applied_criteria)
+        result["excluded"] = filtered["excluded"]
+        result["duplicates"] = deduplicated["duplicates"]
         return json.dumps(result, ensure_ascii=False)
     if provider != "mock":
         return "Error: Unsupported job search provider."

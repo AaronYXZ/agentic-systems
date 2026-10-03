@@ -7,7 +7,8 @@ interactive CLI is in `openai_agent_sdk.cli`.
 
 The fictional catalog is in `data/jobs.json`. By default, the agent searches
 mock jobs, reads a resume, and can save selected mock recommendations. V2
-Steps 1–3 add an opt-in JSearch adapter. Live-job saving is not supported yet.
+Steps 1–6 add opt-in JSearch search, filtering, fit checks, and in-memory
+deduplication. Live-job saving is not supported yet.
 
 ### Requirements
 
@@ -42,7 +43,7 @@ JOB_SEARCH_PROVIDER=jsearch
 JSEARCH_API_KEY=your-key
 ```
 
-The agent still sees only `search_jobs(query: str)`. The adapter sends one
+The agent still sees only `search_jobs(query: str)` for searching. The adapter sends one
 JSearch search request with an eight-second timeout and returns at most ten
 normalized records. Results include their source and UTC retrieval time. A
 missing key, provider error, or malformed response is reported as an error;
@@ -54,8 +55,43 @@ still open. The live API path has not been manually acceptance-tested.
 Use `JOB_SEARCH_PROVIDER=mock` to return to the deterministic local catalog.
 `save_results` remains limited to mock catalog IDs. In JSearch mode, even an
 explicit save request returns a clear unsupported-operation error. This keeps
-the existing write validation intact until live job identity and duplicate
-handling are implemented in later V2 steps.
+the existing write validation intact until live identity and duplicate
+handling are persisted and validated in later steps.
+
+### Live filters, fit checks, and duplicates
+
+Hard filters are taken from the current user message, not model tool arguments.
+For the common phrase “Find remote Python jobs in the US,” the local filter
+enforces remote status and US country. For other exact constraints, add a
+`filters:` clause to the request:
+
+```text
+Find Python jobs filters: location=Chicago; remote=true; role=Engineer; skills=SQL; prefer_skills=AWS
+```
+
+Supported keys are `location`, `remote`, `role`, `skills`, and `prefer_skills`.
+The first four are hard constraints except `remote=false`, which simply does
+not require remote work. `prefer_skills` changes order but does not exclude.
+Missing location, country, remote status, role, or required-skill evidence does
+not pass a hard filter. Tool results show each exclusion and its reason.
+The adapter also passes US and remote constraints upstream and adds an explicit
+role or city to the provider query, but the local post-filter is authoritative.
+Only the first provider page is checked, so an empty filtered result is not
+proof that no matching job exists.
+Conflicting or malformed clauses produce a visible error. This parser is
+deliberately narrow; use an explicit clause for constraints it cannot infer.
+
+After live search, the agent can call `assess_fit(job_id)` for a returned job.
+That tool reads the local resume and compares a limited set of explicit skill
+requirements. It returns exact excerpts from both sources, marks unmatched
+requirements as unverified, and does not infer that the candidate lacks a
+skill. It is not a complete fit score. The job must be searched again on a
+follow-up turn before it can be assessed there.
+
+Within a live search, duplicate provider IDs and canonical URLs are removed
+first. A conservative exact-content fallback handles some cross-source
+reposts. The result reports duplicate IDs and reasons. This is in-memory only;
+tracking previously seen jobs across runs is planned for V3.
 
 ### Run the interactive CLI
 

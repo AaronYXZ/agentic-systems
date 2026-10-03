@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from openai_agent_sdk.agent import AgentTurn, run_agent
 from openai_agent_sdk.contracts import PROJECT_ROOT
+from openai_agent_sdk.filtering import CriteriaError
 
 AgentFunction = Callable[[str, list[TResponseInputItem] | None], AgentTurn]
 
@@ -50,6 +51,9 @@ def run_cli(
         try:
             turn = agent_fn(message, history)
         except ConfigurationError as error:
+            output_fn(f"Agent > {error}")
+            continue
+        except CriteriaError as error:
             output_fn(f"Agent > {error}")
             continue
         except Exception:

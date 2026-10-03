@@ -3,6 +3,7 @@
 import pytest
 from openai_agent_sdk.agent import AgentTurn
 from openai_agent_sdk.cli import ConfigurationError, _run_live_turn, run_cli
+from openai_agent_sdk.filtering import CriteriaError
 
 
 def _input_from(*items):
@@ -127,3 +128,27 @@ def test_missing_api_key_has_actionable_error(monkeypatch):
 
     with pytest.raises(ConfigurationError, match="OPENAI_API_KEY is missing"):
         _run_live_turn("Find jobs", None)
+
+
+def test_invalid_explicit_filter_is_shown_and_cli_recovers():
+    outputs = []
+    calls = []
+
+    def agent(message, history):
+        calls.append((message, history))
+        if len(calls) == 1:
+            raise CriteriaError("Filter remote must be true or false.")
+        return AgentTurn("Recovered.", [])
+
+    run_cli(
+        input_fn=_input_from("Find jobs filters: remote=maybe", "Find jobs", "quit"),
+        output_fn=outputs.append,
+        agent_fn=agent,
+    )
+
+    assert outputs == [
+        "Agent > Filter remote must be true or false.",
+        "Agent > Recovered.",
+        "Goodbye.",
+    ]
+    assert calls[1][1] is None

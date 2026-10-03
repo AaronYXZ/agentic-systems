@@ -2,6 +2,11 @@
 
 ### Status
 
+V2 Steps 1 through 6 have offline implementations. Steps 4 through 6 add
+user-owned filters, excerpt-backed fit checks, and conservative in-memory
+deduplication. A live end-to-end acceptance run is still needed. V2 Steps 7
+and 8, and all V3 steps, remain planned.
+
 Steps 1 through 8 are implemented. The CLI, deterministic checks, and V1
 runbook are in place. A live API-backed manual acceptance run remains for a
 user with a valid key and model access.
@@ -399,8 +404,8 @@ run with a configured key.
 
 ### Milestone gate
 
-V2 Steps 1 through 3 are implemented with JSearch as an opt-in source. V2
-Steps 4 through 8 and all V3 steps remain plans. Complete the remaining
+V2 Steps 1 through 6 are implemented with JSearch as an opt-in source. V2
+Steps 7 and 8 and all V3 steps remain plans. Complete the remaining
 live V1 acceptance checks before replacing the mock search path. Keep the V1
 deterministic tests as regression tests. A possible V4 long-running agent is
 not planned here. FastAPI, deployment, notifications, and background
@@ -486,6 +491,14 @@ are completed.
 
 #### V2 Step 4. Add deterministic filtering
 
+Status: implemented for normalized live jobs. The current user message owns
+the filters. The tool accepts only `query`; local code infers the unambiguous
+"remote ... in the US" form or reads an explicit `filters:` clause. Hard
+filters cover location, remote status, role, and required skills. Missing
+fields fail closed and each exclusion reports reasons. Preferred skills affect
+ordering without excluding jobs. Table-driven offline tests cover matches,
+missing values, and conflicts. Other criteria require an explicit clause.
+
 - Filter structured jobs by explicit user criteria such as location, remote
   preference, role, and required skills. Separate hard exclusions from
   preferences that can affect ranking.
@@ -496,6 +509,14 @@ are completed.
 
 #### V2 Step 5. Match resumes to job descriptions
 
+Status: implemented for explicit skill requirements recognized by a small
+versioned vocabulary. A live-only `assess_fit(job_id)` tool works on jobs
+returned by `search_jobs` in the current turn and reads the local resume.
+It returns job and resume excerpts for matches, and marks missing resume
+evidence as unverified. The model can explain but must not treat this limited
+check as a complete fit assessment. Offline cases cover strong, partial,
+missing-evidence, and misleading-text outcomes.
+
 - Extract evidence from the local resume and each job description. Keep source
   excerpts or field references so fit claims can be checked.
 - Use deterministic requirements checks where possible; use the model only
@@ -505,6 +526,13 @@ are completed.
   resume evidence, and misleading job text. Recommendations cite both sides.
 
 #### V2 Step 6. Improve job deduplication
+
+Status: implemented in memory for normalized live results. Provider ID wins,
+then canonical URL. A cross-source fallback requires exact normalized title,
+company, location, and description, and is disabled when URLs retain identity
+query parameters. Every removed duplicate has a reason. Offline tests cover
+repeated IDs, tracking URL variants, reposts, cross-source equivalents, and
+same-title distinct openings. Previously seen jobs across runs await V3.
 
 - Prefer provider ID and canonical URL for identity. Add a conservative
   fallback for equivalent titles, companies, and locations across sources.

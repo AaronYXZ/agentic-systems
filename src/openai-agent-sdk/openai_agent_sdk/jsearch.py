@@ -44,6 +44,12 @@ def normalize_job(record: object, retrieved_at: str) -> LiveJobPosting:
     employment_type = record.get("job_employment_type")
     if employment_type is not None and not isinstance(employment_type, str):
         raise ValueError("Employment type must be text or null.")
+    is_remote = record.get("job_is_remote")
+    if is_remote is not None and not isinstance(is_remote, bool):
+        raise ValueError("Remote status must be boolean or null.")
+    country = record.get("job_country")
+    if country is not None and not isinstance(country, str):
+        raise ValueError("Country must be text or null.")
     return LiveJobPosting(
         id=f"jsearch:{job_id}",
         provider="jsearch",
@@ -58,6 +64,8 @@ def normalize_job(record: object, retrieved_at: str) -> LiveJobPosting:
         employment_type=(
             employment_type.strip() or None if employment_type is not None else None
         ),
+        is_remote=is_remote,
+        country=country.strip() or None if country is not None else None,
     )
 
 
@@ -67,6 +75,8 @@ def search_jsearch(
     api_key: str,
     opener: Callable = urlopen,
     retrieved_at: str | None = None,
+    country: str | None = None,
+    remote_only: bool = False,
 ) -> dict[str, object]:
     """Fetch one page, normalize up to ten jobs, and fail closed on bad data."""
     if not api_key.strip():
@@ -76,7 +86,12 @@ def search_jsearch(
     if len(query) > 200:
         raise JSearchError("Search query must be 200 characters or fewer.")
 
-    url = f"{SEARCH_URL}?{urlencode({'query': query, 'page': 1, 'num_pages': 1})}"
+    parameters: dict[str, str | int] = {"query": query, "page": 1, "num_pages": 1}
+    if country:
+        parameters["country"] = country
+    if remote_only:
+        parameters["work_from_home"] = "true"
+    url = f"{SEARCH_URL}?{urlencode(parameters)}"
     request = Request(
         url,
         headers={"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": HOST},

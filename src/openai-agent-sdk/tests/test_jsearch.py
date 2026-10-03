@@ -44,6 +44,8 @@ def test_normalization_maps_required_and_optional_fields():
         "posted_at": "2026-10-01T12:00:00Z",
         "retrieved_at": STAMP,
         "employment_type": None,
+        "is_remote": None,
+        "country": None,
     }
     without_optional = normalize_job(
         {key: value for key, value in RAW_JOB.items() if key not in {
@@ -62,6 +64,8 @@ def test_normalization_maps_required_and_optional_fields():
         {},
         {**RAW_JOB, "job_title": ""},
         {**RAW_JOB, "job_apply_link": "javascript:alert(1)"},
+        {**RAW_JOB, "job_is_remote": "true"},
+        {**RAW_JOB, "job_country": 123},
     ],
 )
 def test_normalization_rejects_bad_records(bad_job):
@@ -127,9 +131,11 @@ def test_adapter_rejects_wrong_v2_response_shape():
 
 
 def test_tool_contract_works_with_fake_live_adapter():
-    def fake_search(query, *, api_key):
+    def fake_search(query, *, api_key, country, remote_only):
         assert query == "Python"
         assert api_key == "test-key"
+        assert country is None
+        assert remote_only is False
         return {"source": "jsearch", "retrieved_at": STAMP, "jobs": [
             normalize_job(RAW_JOB, STAMP)
         ]}
@@ -145,3 +151,19 @@ def test_tool_reports_missing_key_without_mock_fallback():
     assert search_jobs("Python", provider="jsearch", api_key="") == (
         "Error: JSearch API key is missing. Set JSEARCH_API_KEY."
     )
+
+
+def test_adapter_can_push_remote_and_country_filters_upstream():
+    observed = {}
+
+    def fake_open(request, *, timeout):
+        observed["url"] = request.full_url
+        return FakeResponse(json.dumps({"data": {"jobs": []}}).encode())
+
+    search_jsearch(
+        "Python jobs", api_key="test-key", opener=fake_open,
+        country="us", remote_only=True,
+    )
+
+    assert parse_qs(urlparse(observed["url"]).query)["country"] == ["us"]
+    assert parse_qs(urlparse(observed["url"]).query)["work_from_home"] == ["true"]
