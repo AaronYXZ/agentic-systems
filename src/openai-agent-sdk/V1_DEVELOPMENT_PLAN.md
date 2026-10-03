@@ -2,8 +2,9 @@
 
 ### Status
 
-Steps 1 through 6 are implemented. The interactive CLI and final V1 runbook
-remain in Steps 7 and 8.
+Steps 1 through 8 are implemented. The CLI, deterministic checks, and V1
+runbook are in place. A live API-backed manual acceptance run remains for a
+user with a valid key and model access.
 
 Step 1 was completed on 2026-10-02. `uv` created a local Python 3.13 virtual
 environment and installed `openai-agents` 0.23.1 and `python-dotenv` 1.2.4.
@@ -30,6 +31,12 @@ Step 6 adds one SDK agent with a versioned prompt, exactly three tools, local
 history replay, and an eight-turn limit. A per-turn save gate requires clear
 user intent before the save tool can write. Scripted-model tests exercise the
 real SDK loop without an API key. A live model run remains part of Step 8.
+
+Step 7 adds a testable interactive CLI with session history, clean exit paths,
+blank-input handling, a missing-key message, and per-turn error recovery.
+
+Step 8 adds setup, CLI, test, reset, troubleshooting, and manual acceptance
+instructions to the README. Automated tests do not substitute for a live run.
 
 This folder is a self-contained learning project directed by
 `agent_codex_plan.md`. V1 uses the OpenAI Agents SDK and stays intentionally
@@ -360,31 +367,35 @@ Manual acceptance scenario:
 Final verification commands:
 
 ```bash
-uv run ruff check src/openai-agent-sdk
-uv run pytest src/openai-agent-sdk/tests
+cd src/openai-agent-sdk
+uv run pytest
+cd ../..
+uv run ruff check .
+uv run pytest
 ```
 
-If the isolated dependency setup is not integrated with the repository's root
-`uv` environment, equivalent commands from the local virtual environment will
-be documented before implementation is considered complete.
+The isolated project and repository root have separate `uv` environments.
+Run each command from the directory shown. The local CLI entry point was also
+smoke-tested with end-of-file input. Live API behavior still needs a manual
+run with a configured key.
 
 ### V1 acceptance checklist
 
-- [ ] The interactive CLI starts successfully.
-- [ ] Natural-language requests reach one OpenAI Agents SDK agent.
-- [ ] The agent can call `read_resume`.
-- [ ] The agent can call `search_jobs`.
-- [ ] The agent explains job fit using grounded evidence.
-- [ ] The shortlist contains only jobs returned by the search tool.
-- [ ] The agent saves only after explicit user intent.
-- [ ] Duplicate job IDs are not appended twice.
-- [ ] API and tool failures do not terminate the CLI.
-- [ ] Agent logic remains independent from terminal input and output.
-- [ ] Core tool tests do not require an API key.
-- [ ] Secrets, personal resume data, and generated results are not committed.
-- [ ] The local README contains complete setup and run instructions.
-- [ ] V2 features have not been introduced.
-- [ ] Repository quality checks pass.
+- [x] The interactive CLI starts successfully.
+- [x] Natural-language requests reach one OpenAI Agents SDK agent in scripted tests.
+- [x] The agent can call `read_resume` in scripted tests.
+- [x] The agent can call `search_jobs` in scripted tests.
+- [ ] A live model explains job fit using grounded evidence.
+- [ ] A live shortlist contains only jobs returned by the search tool.
+- [x] The agent saves only after explicit user intent in scripted tests.
+- [x] Duplicate job IDs are not appended twice in deterministic tests.
+- [x] Simulated API and tool failures do not terminate the CLI.
+- [x] Agent logic remains independent from terminal input and output.
+- [x] Core tool tests do not require an API key.
+- [x] Secrets, personal resume data, and generated results are not committed.
+- [x] The local README contains complete setup and run instructions.
+- [x] V2 features have not been introduced.
+- [x] Repository quality checks pass.
 
 ### Deferred until V1 passes
 
