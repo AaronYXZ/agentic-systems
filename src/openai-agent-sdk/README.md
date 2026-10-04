@@ -7,8 +7,8 @@ interactive CLI is in `openai_agent_sdk.cli`.
 
 The fictional catalog is in `data/jobs.json`. By default, the agent searches
 mock jobs, reads a resume, and can save selected mock recommendations. V2
-Steps 1–6 add opt-in JSearch search, filtering, fit checks, and in-memory
-deduplication. Live-job saving is not supported yet.
+Steps 1–7 add opt-in JSearch search, filtering, fit checks, in-memory
+deduplication, and tool tracing. Live-job saving is not supported yet.
 
 ### Requirements
 
@@ -92,6 +92,38 @@ Within a live search, duplicate provider IDs and canonical URLs are removed
 first. A conservative exact-content fallback handles some cross-source
 reposts. The result reports duplicate IDs and reasons. This is in-memory only;
 tracking previously seen jobs across runs is planned for V3.
+
+### Tool tracing
+
+Each executed function tool records its name, model-generated call ID,
+duration in milliseconds, outcome, source, and error class. Python callers
+can inspect `turn.tool_traces`. These records contain no arguments, outputs,
+API keys, resume text, job descriptions, or exception messages. An `Error:`
+result is recorded as `ToolReportedError`; the string contract does not retain
+the underlying provider exception class. Raised exceptions record their class.
+
+To print local records as JSON lines on stderr, set:
+
+```text
+JOB_AGENT_LOCAL_TRACING=true
+```
+
+Records are emitted after the run, including completed tool calls before a
+run failure. They are kept in memory for the turn, and for as long as the
+caller retains its `AgentTurn`. There is no trace file or automatic disk
+retention. Redirected stderr is under the user's retention control. Trace
+records are not added to conversation history or sent to the model.
+
+OpenAI SDK trace export is a separate opt-in setting:
+
+```text
+JOB_AGENT_SDK_TRACING=true
+```
+
+The runner always sets `trace_include_sensitive_data=False` for SDK tracing.
+This disables sensitive payload inclusion; SDK export is broader than the
+local metadata records and is governed by the SDK and provider's retention.
+Both switches default to `false`. Offline tests do not export SDK traces.
 
 ### Run the interactive CLI
 

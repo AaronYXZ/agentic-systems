@@ -20,10 +20,74 @@ from openai_agent_sdk.jsearch import normalize_job
 from openai_agent_sdk.tools import search_jobs as search_jobs_file
 
 
+def test_trace_ids_match_history_for_search_and_resume_failure(tmp_path):
+    model = ScriptedModel([
+        [_call("search_jobs", {"query": "ranking"}, "search-trace"),
+         _call("read_resume", {}, "resume-trace")],
+        [_answer("Resume missing.")],
+    ])
+    records = []
+    turn = run_agent(
+        "Find jobs", agent=build_agent(model=model, resume_path=tmp_path / "missing"),
+        trace_sink=records.append,
+    )
+    outputs = {item["call_id"] for item in turn.history
+               if item.get("type") == "function_call_output"}
+    assert {record.call_id for record in records} == outputs
+    assert tuple(records) == turn.tool_traces
+    assert {(r.tool_name, r.outcome, r.error_class) for r in records} == {
+        ("search_jobs", "success", None),
+        ("read_resume", "error", "ToolReportedError"),
+    }
+    for tool in build_agent(model=model).tools:
+        assert "ctx" not in tool.params_json_schema.get("properties", {})
+
+
+def test_failed_run_delivers_collected_traces(tmp_path):
+    model = ScriptedModel([[_call("read_resume", {}, "failed-turn")]])
+    records = []
+    with pytest.raises(MaxTurnsExceeded):
+        run_agent("Find jobs", max_turns=1, trace_sink=records.append,
+                  agent=build_agent(model=model, resume_path=tmp_path / "missing"))
+    assert records[0].call_id == "failed-turn"
+    assert records[0].outcome == "error"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_sdk_tracing_config_excludes_sensitive_data(monkeypatch, enabled):
+    from types import SimpleNamespace
+
+    configs = []
+
+    def fake_run(*args, **kwargs):
+        configs.append(kwargs["run_config"])
+        return SimpleNamespace(final_output="done", to_input_list=lambda: [])
+
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", str(enabled).lower())
+    monkeypatch.setattr("openai_agent_sdk.agent.Runner.run_sync", fake_run)
+    run_agent("Hello", agent=build_agent(model="fake"))
+    assert configs[0].tracing_disabled is not enabled
+    assert configs[0].trace_include_sensitive_data is False
+
+
+def test_trace_sink_failure_does_not_replace_answer(tmp_path):
+    def broken_sink(record):
+        raise OSError("unavailable")
+
+    model = ScriptedModel([
+        [_call("read_resume", {}, "sink-failure")], [_answer("Resume missing.")]
+    ])
+    turn = run_agent("Find jobs", trace_sink=broken_sink,
+                     agent=build_agent(model=model, resume_path=tmp_path / "missing"))
+    assert turn.text == "Resume missing."
+    assert turn.tool_traces[0].call_id == "sink-failure"
+
+
 @pytest.fixture(autouse=True)
 def default_to_mock_provider(monkeypatch):
     """Keep scripted-model tests independent of a developer's local .env."""
     monkeypatch.setenv("JOB_SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
 
 
 def _call(name: str, arguments: dict[str, str], call_id: str):
@@ -109,6 +173,10 @@ def test_jsearch_mode_adds_fit_tool_and_blocks_live_saving(tmp_path):
     turn = run_agent("Save this job", agent=agent)
     assert turn.text == "I could not save that live job."
     assert not results.exists()
+    record, = turn.tool_traces
+    assert record.tool_name == "save_results"
+    assert record.source == "local_results"
+    assert record.outcome == "error"
 
 
 def test_live_agent_search_filters_then_checks_fit_with_local_evidence(
@@ -175,6 +243,9 @@ def test_live_agent_search_filters_then_checks_fit_with_local_evidence(
 
     assert "Requirements: Python and SQL experience." in turn.text
     assert "Built Python services." in turn.text
+    assert [(trace.call_id, trace.source) for trace in turn.tool_traces] == [
+        ("search-1", "jsearch"), ("fit-1", "local_matching")
+    ]
 
 
 def test_live_fit_requires_a_job_searched_this_turn(tmp_path):

@@ -6,6 +6,24 @@ from openai_agent_sdk.cli import ConfigurationError, _run_live_turn, run_cli
 from openai_agent_sdk.filtering import CriteriaError
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_local_trace_switch_selects_stderr_sink(monkeypatch, enabled):
+    from openai_agent_sdk.cli import _print_trace
+
+    captured = []
+
+    def fake_run(message, history, *, trace_sink):
+        captured.append(trace_sink)
+        return AgentTurn("Done.", [])
+
+    monkeypatch.setattr("openai_agent_sdk.cli.load_dotenv", lambda path: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("JOB_AGENT_LOCAL_TRACING", str(enabled).lower())
+    monkeypatch.setattr("openai_agent_sdk.cli.run_agent", fake_run)
+    _run_live_turn("Find jobs", None)
+    assert captured == [_print_trace if enabled else None]
+
+
 def _input_from(*items):
     responses = iter(items)
     return lambda prompt: next(responses)

@@ -1,7 +1,10 @@
 """Interactive terminal loop for the single job search agent."""
 
+import json
 import os
+import sys
 from collections.abc import Callable
+from dataclasses import asdict
 
 from agents import TResponseInputItem
 from dotenv import load_dotenv
@@ -9,6 +12,7 @@ from dotenv import load_dotenv
 from openai_agent_sdk.agent import AgentTurn, run_agent
 from openai_agent_sdk.contracts import PROJECT_ROOT
 from openai_agent_sdk.filtering import CriteriaError
+from openai_agent_sdk.tool_tracing import ToolTrace
 
 AgentFunction = Callable[[str, list[TResponseInputItem] | None], AgentTurn]
 
@@ -24,7 +28,15 @@ def _run_live_turn(message: str, history: list[TResponseInputItem] | None) -> Ag
         raise ConfigurationError(
             "OPENAI_API_KEY is missing. Add it to .env and try again."
         )
-    return run_agent(message, history)
+    local_tracing = os.getenv("JOB_AGENT_LOCAL_TRACING", "false").lower() == "true"
+    return run_agent(
+        message, history, trace_sink=_print_trace if local_tracing else None
+    )
+
+
+def _print_trace(record: ToolTrace) -> None:
+    """Print allowlisted metadata to stderr without tool content."""
+    print(json.dumps(asdict(record)), file=sys.stderr)
 
 
 def run_cli(

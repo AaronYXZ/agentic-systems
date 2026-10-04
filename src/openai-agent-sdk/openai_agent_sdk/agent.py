@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -11,11 +12,11 @@ from agents import (
     Agent,
     Model,
     RunConfig,
-    RunContextWrapper,
     Runner,
     TResponseInputItem,
     function_tool,
 )
+from agents.tool_context import ToolContext
 from dotenv import load_dotenv
 
 from .contracts import (
@@ -27,6 +28,7 @@ from .contracts import (
 )
 from .filtering import SearchCriteria, parse_criteria
 from .matching import assess_fit as assess_live_fit
+from .tool_tracing import ToolTrace, traced_call
 from .tools import read_resume as read_resume_file
 from .tools import save_results as save_results_file
 from .tools import search_jobs as search_job_records
@@ -54,6 +56,7 @@ class JobAgentContext:
     save_allowed: bool
     criteria: SearchCriteria = SearchCriteria()
     searched_jobs: dict[str, LiveJobPosting] = field(default_factory=dict)
+    tool_traces: list[ToolTrace] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,7 @@ class AgentTurn:
 
     text: str
     history: list[TResponseInputItem]
+    tool_traces: tuple[ToolTrace, ...] = ()
 
 
 def explicit_save_requested(message: str) -> bool:
@@ -85,7 +89,7 @@ def build_agent(
     provider: str | None = None,
     jsearch_api_key: str | None = None,
 ) -> Agent[JobAgentContext]:
-    """Register three SDK tools with mock or opt-in JSearch search."""
+    """Register three mock tools or four tools for opt-in JSearch search."""
     load_dotenv(PROJECT_ROOT / ".env")
     if model is None:
         model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
@@ -97,45 +101,65 @@ def build_agent(
     )
 
     @function_tool
-    def search_jobs(ctx: RunContextWrapper[JobAgentContext], query: str) -> str:
+    def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
-        output = search_job_records(
-            query, catalog_path=catalog_path,
-            provider=selected_provider,
-            api_key=selected_key,
-            criteria=ctx.context.criteria,
+        def operation() -> str:
+            output = search_job_records(
+                query, catalog_path=catalog_path,
+                provider=selected_provider,
+                api_key=selected_key,
+                criteria=ctx.context.criteria,
+            )
+            if selected_provider == "jsearch" and not output.startswith("Error:"):
+                parsed = json.loads(output)
+                ctx.context.searched_jobs.update(
+                    {job["id"]: job for job in parsed["jobs"]}
+                )
+            return output
+
+        return traced_call(
+            ctx, operation=operation,
+            source=(selected_provider if selected_provider in {"mock", "jsearch"}
+                    else "unknown"),
         )
-        if selected_provider == "jsearch" and not output.startswith("Error:"):
-            parsed = json.loads(output)
-            ctx.context.searched_jobs.update({job["id"]: job for job in parsed["jobs"]})
-        return output
 
     @function_tool
-    def read_resume() -> str:
+    def read_resume(ctx: ToolContext[JobAgentContext]) -> str:
         """Read the candidate's local resume for specific experience evidence."""
-        return read_resume_file(resume_path=resume_path)
-
-    @function_tool
-    def save_results(ctx: RunContextWrapper[JobAgentContext], content: str) -> str:
-        """Save catalog job IDs and recommendation text only on user request."""
-        if not ctx.context.save_allowed:
-            return "Error: Saving requires an explicit request in the current message."
-        if selected_provider != "mock":
-            return "Error: Saving live jobs is not supported yet."
-        return save_results_file(
-            content, results_path=results_path, catalog_path=catalog_path
+        return traced_call(
+            ctx, source="local_resume",
+            operation=lambda: read_resume_file(resume_path=resume_path),
         )
 
     @function_tool
-    def assess_fit(ctx: RunContextWrapper[JobAgentContext], job_id: str) -> str:
+    def save_results(ctx: ToolContext[JobAgentContext], content: str) -> str:
+        """Save catalog job IDs and recommendation text only on user request."""
+        def operation() -> str:
+            if not ctx.context.save_allowed:
+                return (
+                    "Error: Saving requires an explicit request in the current message."
+                )
+            if selected_provider != "mock":
+                return "Error: Saving live jobs is not supported yet."
+            return save_results_file(
+                content, results_path=results_path, catalog_path=catalog_path
+            )
+
+        return traced_call(ctx, source="local_results", operation=operation)
+
+    @function_tool
+    def assess_fit(ctx: ToolContext[JobAgentContext], job_id: str) -> str:
         """Check a searched job against local resume evidence, without guessing."""
-        job = ctx.context.searched_jobs.get(job_id)
-        if job is None:
-            return "Error: Search for this live job in the current turn first."
-        resume = read_resume_file(resume_path=resume_path)
-        if resume.startswith("Error:"):
-            return resume
-        return json.dumps(assess_live_fit(job, resume), ensure_ascii=False)
+        def operation() -> str:
+            job = ctx.context.searched_jobs.get(job_id)
+            if job is None:
+                return "Error: Search for this live job in the current turn first."
+            resume = read_resume_file(resume_path=resume_path)
+            if resume.startswith("Error:"):
+                return resume
+            return json.dumps(assess_live_fit(job, resume), ensure_ascii=False)
+
+        return traced_call(ctx, source="local_matching", operation=operation)
 
     return Agent(
         name="Job Search Agent",
@@ -165,6 +189,7 @@ def run_agent(
     *,
     agent: Agent[JobAgentContext] | None = None,
     max_turns: int = MAX_TURNS,
+    trace_sink: Callable[[ToolTrace], None] | None = None,
 ) -> AgentTurn:
     """Run one bounded agent turn and return its answer plus local history."""
     if not user_message.strip():
@@ -177,13 +202,29 @@ def run_agent(
         *(history or []),
         {"role": "user", "content": user_message},
     ]
-    result = Runner.run_sync(
-        agent or build_agent(),
-        turn_input,
-        context=JobAgentContext(
-            save_allowed=explicit_save_requested(user_message), criteria=criteria
-        ),
-        max_turns=max_turns,
-        run_config=RunConfig(tracing_disabled=True),
+    selected_agent = agent or build_agent()
+    context = JobAgentContext(
+        save_allowed=explicit_save_requested(user_message), criteria=criteria
     )
-    return AgentTurn(text=str(result.final_output), history=result.to_input_list())
+    sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
+    try:
+        result = Runner.run_sync(
+            selected_agent, turn_input, context=context, max_turns=max_turns,
+            run_config=RunConfig(
+                tracing_disabled=not sdk_tracing,
+                trace_include_sensitive_data=False,
+                workflow_name="Job Search Agent",
+            ),
+        )
+    finally:
+        if trace_sink is not None:
+            for record in context.tool_traces:
+                try:
+                    trace_sink(record)
+                except Exception:
+                    # Trace output must not replace the run's result or error.
+                    pass
+    return AgentTurn(
+        text=str(result.final_output), history=result.to_input_list(),
+        tool_traces=tuple(context.tool_traces),
+    )

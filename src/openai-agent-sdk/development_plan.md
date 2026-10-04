@@ -2,10 +2,11 @@
 
 ### Status
 
-V2 Steps 1 through 6 have offline implementations. Steps 4 through 6 add
+V2 Steps 1 through 7 have offline implementations. Steps 4 through 6 add
 user-owned filters, excerpt-backed fit checks, and conservative in-memory
-deduplication. A live end-to-end acceptance run is still needed. V2 Steps 7
-and 8, and all V3 steps, remain planned.
+deduplication. Step 7 adds local metadata records and opt-in SDK tracing.
+A live end-to-end acceptance run is still needed. V2 Step 8 and all V3
+steps remain planned.
 
 Steps 1 through 8 are implemented. The CLI, deterministic checks, and V1
 runbook are in place. A live API-backed manual acceptance run remains for a
@@ -404,8 +405,8 @@ run with a configured key.
 
 ### Milestone gate
 
-V2 Steps 1 through 6 are implemented with JSearch as an opt-in source. V2
-Steps 7 and 8 and all V3 steps remain plans. Complete the remaining
+V2 Steps 1 through 7 are implemented with JSearch as an opt-in source. V2
+Step 8 and all V3 steps remain plans. Complete the remaining
 live V1 acceptance checks before replacing the mock search path. Keep the V1
 deterministic tests as regression tests. A possible V4 long-running agent is
 not planned here. FastAPI, deployment, notifications, and background
@@ -542,6 +543,16 @@ same-title distinct openings. Previously seen jobs across runs await V3.
   same-title but distinct jobs without collapsing valid openings.
 
 #### V2 Step 7. Add safe tool tracing
+
+Status: implemented. Each executed function tool records metadata with the
+SDK call ID, duration, outcome, source, and error class. Local records are
+returned on `AgentTurn` and optionally printed to stderr after the run, also
+on run failure. They exclude arguments, outputs, and exception messages.
+There is no file persistence; records live while their turn is retained.
+SDK trace export is separately opt-in and sensitive payload inclusion is
+disabled. Offline tests verify correlation, redaction, failures, and switches.
+String-reported failures have class `ToolReportedError`; raised exceptions
+retain their class name. Live SDK export acceptance remains part of Step 8.
 
 - Record each tool name, call ID, duration, outcome, source, and error class.
   Make SDK tracing an explicit, configurable choice instead of assuming it is
