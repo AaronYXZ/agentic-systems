@@ -254,3 +254,42 @@ tests use no API key and do not prove live model behavior.
 - Tool failure: check that `data/jobs.json` is intact and local files are
   readable or writable. The agent should report a tool error rather than
   inventing missing information.
+
+### V2-b Option B: minimal MCP adapter (steps 1–3)
+
+The standalone adapter discovers `jsearch`, checks that `search_v2` is supported,
+and calls only that read-only operation. It reuses `normalize_job` to return the
+existing job contract. Each search requests one page, returns at most ten jobs,
+and has an eight-second client deadline with no retries. Provider errors become
+safe `JSearchError` messages; unexpected programming errors keep their traceback.
+The caller owns the initialized MCP session. Discovery expects the pinned
+server’s single-page tool list; incompatible or paginated lists are rejected.
+
+The official server is pinned to `@openwebninja/mcp-server@0.1.1` and launched
+with `npx` (Node.js >=18). Set `OPENWEBNINJA_API_KEY` in the ignored `.env` for
+later live use. Confirm your account's JSearch access and quota manually.
+RapidAPI credentials are separate. Account access has not been verified.
+
+From this directory, run the offline checks and discovery-only smoke check:
+
+```bash
+uv run pytest tests/test_openwebninja_mcp.py
+uv run python -m openai_agent_sdk.mcp_discovery
+```
+
+Discovery starts the pinned server with an empty key, validates its schema,
+and closes the connection without searching or subscribing. `npx` may download
+the package on first launch; its transitive dependencies are not locked.
+
+The reviewed package maps `search_v2` to `GET /jsearch/search-v2` and returns
+JSON text containing `data.jobs`. Its discovery schema has a generic `args`
+object, so the adapter constructs the search arguments itself. It also accepts
+structured results and rejects malformed jobs or conflicting result forms.
+
+The server has no upstream HTTP timeout or cancellation support. The client
+deadline does not prove a paid request stopped. The CLI still uses mock or
+direct JSearch; connection lifecycle, CLI routing, and tracing belong to steps
+4–6. Live response parity remains unverified.
+
+References: [official server](https://github.com/OpenWeb-Ninja/openwebninja-mcp),
+[operation manifest](https://github.com/OpenWeb-Ninja/openwebninja-mcp/blob/main/src/generated/manifest.ts).

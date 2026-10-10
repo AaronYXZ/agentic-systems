@@ -571,6 +571,150 @@ retain their class name. Live SDK export acceptance remains part of Step 8.
 - Exit evidence: the README has setup and acceptance instructions; V1 mock
   tests and V2 tests pass. Defer persistence and scheduling to later stages.
 
+### V2-b. JSearch through MCP
+
+Status: Option B selected. Step 1 search contract is checked against the pinned
+package. Steps 2 and 3 provide stdio configuration and a tested standalone adapter.
+Account access and quotas remain unverified. Steps 4 through 7 and V2 Step 8
+live acceptance remain pending. The CLI does not yet use MCP.
+
+Outcome: call JSearch through MCP while preserving the existing application
+behavior. MCP defines how the application calls tools. The MCP server still
+calls a job API.
+
+#### Two server options
+
+| Decision | Option A. Our Python MCP server | Option B. OpenWeb Ninja MCP server |
+|---|---|---|
+| Maintainer | Us | OpenWeb Ninja |
+| Exposed tools | One bounded, read-only job search tool | JSearch and many other API tools |
+| Credentials | Existing `JSEARCH_API_KEY` for RapidAPI | `OPENWEBNINJA_API_KEY` |
+| API path | Existing RapidAPI `/search-v2` adapter | OpenWeb Ninja API through its official server |
+| Server runtime | Python with local stdio transport | Official package launched through `npx` |
+| Work required | Build the small server, client adapter, and application integration | Configure the official server, build the client adapter, and integrate it |
+| Behavior to check | Preserve the existing adapter contract across MCP | Check search operation, response format, timeout, limits, and errors against the existing contract |
+
+Option A request path:
+
+```text
+Job Search Agent -> MCP client -> our Python MCP server
+                 -> existing RapidAPI adapter -> JSearch
+```
+
+Option B request path:
+
+```text
+Job Search Agent -> MCP client -> OpenWeb Ninja MCP server
+                 -> OpenWeb Ninja API
+```
+
+Option B is selected for implementation. Option A remains a documented
+alternative. Option A preserves the working RapidAPI key and `/search-v2` endpoint. We maintain the small server and reuse the
+existing adapter. The API call moves behind MCP; the underlying API remains active.
+
+For Option B, the official server includes a `jsearch` tool
+with operation and argument parameters. It requires an OpenWeb Ninja key.
+Do not assume the existing RapidAPI key works with that server. Before choosing
+Option B, check account access, the required search operation, and behavior
+against the existing adapter contract.
+
+Provider reference:
+[Introducing the OpenWeb Ninja MCP Server](https://www.openwebninja.com/blog/openwebninja-mcp-server).
+
+#### Shared application boundary
+
+- Keep the model-facing `search_jobs(query)` wrapper. Do not register raw
+  provider tools directly with the model.
+- Select mock, direct JSearch, or MCP search through configuration. The model
+  does not choose the transport. MCP mode uses MCP exclusively and does not
+  silently fall back to direct search or mock data.
+- Preserve user-owned `SearchCriteria`, deterministic filters, deduplication,
+  and `JobAgentContext.searched_jobs` updates.
+- Preserve `assess_fit` checks against jobs searched in the current turn.
+  Keep resume reading local and retain the restriction on saving live jobs.
+- Adapt existing local tracing to await MCP work. Preserve the tool call ID,
+  duration, outcome, source, and error class without sensitive content.
+  A separate tracing system is not required. SDK tracing remains independent.
+
+Disabling direct search alone does not implement MCP. Either option requires
+a client adapter, connection management, response validation, and tests.
+
+#### Planned steps for Option A
+
+1. **Define the MCP boundary.** Specify the server tool schema and normalized
+   provider contract. Reuse the existing RapidAPI adapter and `/search-v2`.
+2. **Expose the search tool.** Add a read-only Python MCP tool over local
+   stdio. Keep credentials server-side. Preserve one request, the eight-second
+   HTTP timeout, no automatic retry, and the limit of ten normalized jobs.
+3. **Build the MCP client adapter.** Discover and validate the tool schema.
+   Call the server, decode content or structured results, validate normalized
+   jobs, and map MCP failures into the existing provider error contract.
+4. **Manage connections and async execution.** Keep one MCP connection open
+   for the CLI session. Close it on normal exit, interruption, and failure.
+   Preserve history, per-turn recovery, and turn limits.
+5. **Preserve application behavior.** Retain the shared application boundary
+   above. Apply filters and deduplication locally before updating searched jobs.
+6. **Adapt tracing.** Await MCP execution inside the existing traced wrapper.
+   Record completion and failure with the existing model tool call ID.
+   Nested server operations are an optional later extension.
+7. **Verify equivalent behavior.** Add offline MCP tests and an explicitly
+   enabled live acceptance run. Compare schemas, normalized jobs, filtering,
+   duplicates, fit evidence, errors, tracing, and clean shutdown.
+
+#### Planned steps for Option B
+
+Steps 2 and 3 are implemented with build-minimal. Step 1 has a verified
+package-level search contract; account access and quota checks remain pending. The pinned package is
+`@openwebninja/mcp-server@0.1.1`; its `search_v2` operation maps to
+`/jsearch/search-v2`. The standalone adapter validates discovery once, constructs
+owned search arguments, and reuses the existing job normalizer. It requests one
+page, caps output at ten jobs, and does not retry. Specific protocol, network,
+and provider failures become safe errors; unexpected errors retain their traceback.
+Verification: 105 SDK tests, 15 root tests, and the root Ruff check passed.
+The discovery-only command started the pinned server, validated its schema,
+and closed the connection without provider calls.
+Step 1 account access and quota checks remain pending. The server has no upstream
+HTTP deadline or cancellation support. Steps 4–7 remain future work.
+
+1. **Confirm provider access and the search contract.** Check the OpenWeb Ninja
+   account, JSearch access, quotas, and required search operation. Compare its
+   parameters and response fields with the existing normalized job contract.
+   Do not assume equivalence with RapidAPI `/search-v2`.
+2. **Configure the official server.** Select and pin a reviewed package version
+   for local stdio execution through `npx`. Supply `OPENWEBNINJA_API_KEY` through
+   ignored environment configuration. Check startup requirements without making
+   live search calls. Do not expose subscription or unrelated API tools to the model.
+3. **Build the MCP client adapter.** Discover and validate the `jsearch` schema.
+   Allow only the selected read-only search operation. Decode content or
+   structured results, map fields to `LiveJobPosting`, and reject malformed jobs.
+   Map provider and MCP failures into the existing provider error contract.
+4. **Bound requests and manage the connection.** Keep one connection open for
+   the CLI session. Enforce a client deadline and a limit of ten normalized jobs.
+   Check whether the server supports the existing eight-second HTTP timeout
+   and no-retry policy. A client deadline alone does not prove server cancellation.
+   Document any differences. Close the connection and child process on every
+   exit path. Preserve history, turn limits, and per-turn error recovery.
+5. **Preserve application behavior.** Route `search_jobs(query)` through the
+   adapter when configuration selects Option B. Retain local user-owned filters,
+   deduplication, searched-job context, fit checks, and save restrictions.
+   Do not let the model select the transport or bypass the wrapper.
+6. **Adapt tracing.** Await the MCP request inside the existing traced wrapper.
+   Preserve the model tool call ID, duration, outcome, source, and error class.
+   Exclude credentials, arguments, job descriptions, resume text, and raw errors.
+   Keep SDK tracing independently configurable.
+7. **Verify behavior and record differences.** Add offline fixtures for schema
+   discovery, response mapping, filtering, duplicates, fit evidence, provider
+   errors, malformed results, timeouts, tracing, and clean shutdown. Add an
+   opt-in live acceptance run with configured account access. Record observed
+   differences from direct JSearch before declaring equivalent behavior.
+
+#### Exit evidence for either option
+
+Deterministic tests demonstrate equivalent application behavior
+with fake responses over MCP. The live acceptance run records observed results
+only after explicit enablement. Run isolated project tests and repository Ruff
+and pytest checks. No live API call is required for offline tests.
+
 ### V3. Persistent State
 
 Outcome: add local SQLite storage for `jobs`, `searches`, `recommendations`,

@@ -712,6 +712,8 @@ name = "openai-agent-sdk-job-search"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
+    { name = "mcp" },
     { name = "openai-agents" },
     { name = "python-dotenv" },
 ]
@@ -723,6 +725,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4.26,<5" },
+    { name = "mcp", specifier = ">=2.2,<3" },
     { name = "openai-agents", specifier = ">=0.22,<1" },
     { name = "python-dotenv", specifier = ">=1,<2" },
 ]
