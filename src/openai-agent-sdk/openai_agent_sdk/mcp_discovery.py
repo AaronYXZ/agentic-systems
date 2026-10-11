@@ -2,17 +2,12 @@
 
 import asyncio
 
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client
-
-from .openwebninja_mcp import OpenWebNinjaAdapter, server_parameters
+from .openwebninja_mcp import open_search_session
 
 
 async def check_discovery() -> None:
-    async with stdio_client(server_parameters()) as (read, write):
-        async with ClientSession(read, write) as session:
-            await asyncio.wait_for(session.initialize(), timeout=15)
-            await OpenWebNinjaAdapter.discover(session)
+    async with open_search_session():
+        pass
     print("Validated jsearch.search_v2; connection closed. No provider call made.")
 
 

@@ -47,36 +47,16 @@ def search_jobs(
 
     if provider == "jsearch":
         applied_criteria = criteria or SearchCriteria()
-        provider_query = query.strip()
-        if (applied_criteria.role and
-                applied_criteria.role.casefold() not in provider_query.casefold()):
-            provider_query += f" {applied_criteria.role}"
-        location = applied_criteria.location
-        if (location and location.casefold() not in {"us", "usa", "united states"}
-                and location.casefold() not in provider_query.casefold()):
-            provider_query += f" in {location}"
+        provider_query, options = provider_request(query, applied_criteria)
         try:
             result = live_search(
                 provider_query,
                 api_key=api_key,
-                country=("us" if applied_criteria.location and
-                         applied_criteria.location.casefold() in
-                         {"us", "usa", "united states"} else None),
-                remote_only=applied_criteria.remote_only,
+                **options,
             )
         except JSearchError as exc:
             return f"Error: {exc}"
-        if not isinstance(result.get("jobs"), list):
-            return "Error: Job search returned an invalid response."
-        filtered = filter_jobs(
-            cast(list[LiveJobPosting], result["jobs"]), applied_criteria
-        )
-        deduplicated = deduplicate_jobs(filtered["jobs"])
-        result["jobs"] = deduplicated["jobs"]
-        result["criteria"] = asdict(applied_criteria)
-        result["excluded"] = filtered["excluded"]
-        result["duplicates"] = deduplicated["duplicates"]
-        return json.dumps(result, ensure_ascii=False)
+        return format_live_results(result, applied_criteria)
     if provider != "mock":
         return "Error: Unsupported job search provider."
 
@@ -96,4 +76,37 @@ def search_jobs(
     result: dict[str, object] = {"source": "mock", "jobs": matches}
     if not matches:
         result["message"] = "No mock jobs matched the query."
+    return json.dumps(result, ensure_ascii=False)
+
+
+def provider_request(query: str, criteria: SearchCriteria) -> tuple[str, dict]:
+    """Build the same provider query and filters for HTTP and MCP."""
+    provider_query = query.strip()
+    if (criteria.role and
+            criteria.role.casefold() not in provider_query.casefold()):
+        provider_query += f" {criteria.role}"
+    location = criteria.location
+    if (location and location.casefold() not in {"us", "usa", "united states"}
+            and location.casefold() not in provider_query.casefold()):
+        provider_query += f" in {location}"
+    return provider_query, {
+        "country": ("us" if criteria.location and
+                    criteria.location.casefold() in {"us", "usa", "united states"}
+                    else None),
+        "remote_only": criteria.remote_only,
+    }
+
+
+def format_live_results(result: dict, criteria: SearchCriteria) -> str:
+    """Apply the existing local filters and deduplication for either transport."""
+    if not isinstance(result.get("jobs"), list):
+        return "Error: Job search returned an invalid response."
+    filtered = filter_jobs(
+        cast(list[LiveJobPosting], result["jobs"]), criteria
+    )
+    deduplicated = deduplicate_jobs(filtered["jobs"])
+    result["jobs"] = deduplicated["jobs"]
+    result["criteria"] = asdict(criteria)
+    result["excluded"] = filtered["excluded"]
+    result["duplicates"] = deduplicated["duplicates"]
     return json.dumps(result, ensure_ascii=False)

@@ -575,8 +575,9 @@ retain their class name. Live SDK export acceptance remains part of Step 8.
 
 Status: Option B selected. Step 1 search contract is checked against the pinned
 package. Steps 2 and 3 provide stdio configuration and a tested standalone adapter.
-Account access and quotas remain unverified. Steps 4 through 7 and V2 Step 8
-live acceptance remain pending. The CLI does not yet use MCP.
+Steps 4 and 5 add session ownership, an async CLI loop, and provider routing.
+Account access and quotas remain unverified. Steps 6 through 7 and V2 Step 8
+live acceptance remain pending. The CLI uses MCP when JOB_SEARCH_PROVIDER=mcp.
 
 Outcome: call JSearch through MCP while preserving the existing application
 behavior. MCP defines how the application calls tools. The MCP server still
@@ -674,7 +675,25 @@ Verification: 105 SDK tests, 15 root tests, and the root Ruff check passed.
 The discovery-only command started the pinned server, validated its schema,
 and closed the connection without provider calls.
 Step 1 account access and quota checks remain pending. The server has no upstream
-HTTP deadline or cancellation support. Steps 4–7 remain future work.
+HTTP deadline or cancellation support. Steps 6–7 remain future work.
+
+Step 4 implementation: `open_search_session` owns initialization, discovery,
+and stdio cleanup. Both CLI entry points share one conversation loop.
+`run_mcp_cli` reuses one connection and retains history after
+a failed turn. `run_agent_async` uses the SDK async runner with the existing
+turn limit. The normal CLI now selects MCP from configuration. Offline lifecycle
+checks cover normal exit, initialization failure, cancellation, input exits,
+history recovery, and search timeout without retries. Verification: 115 SDK
+tests, 15 root tests, and Ruff passed. A real-server smoke check reused one
+connection across two CLI turns and closed it without search or model calls.
+
+Step 5 implementation: the model-facing async `search_jobs` awaits the session
+adapter in MCP mode. HTTP and MCP share query preparation, filters,
+deduplication, and formatting. Only retained jobs authorize fit checks in the
+current turn. Local resume reads and the live-save restriction remain intact.
+No direct or mock fallback exists in MCP mode. Offline SDK tests cover the
+search-to-fit-to-save flow, earlier-turn fit rejection, provider failure,
+and CLI provider selection. Async MCP search tracing remains step 6.
 
 1. **Confirm provider access and the search contract.** Check the OpenWeb Ninja
    account, JSearch access, quotas, and required search operation. Compare its

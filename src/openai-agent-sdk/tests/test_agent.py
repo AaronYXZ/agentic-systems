@@ -59,12 +59,12 @@ def test_sdk_tracing_config_excludes_sensitive_data(monkeypatch, enabled):
 
     configs = []
 
-    def fake_run(*args, **kwargs):
+    async def fake_run(*args, **kwargs):
         configs.append(kwargs["run_config"])
         return SimpleNamespace(final_output="done", to_input_list=lambda: [])
 
     monkeypatch.setenv("JOB_AGENT_SDK_TRACING", str(enabled).lower())
-    monkeypatch.setattr("openai_agent_sdk.agent.Runner.run_sync", fake_run)
+    monkeypatch.setattr("openai_agent_sdk.agent.Runner.run", fake_run)
     run_agent("Hello", agent=build_agent(model="fake"))
     assert configs[0].tracing_disabled is not enabled
     assert configs[0].trace_include_sensitive_data is False
@@ -419,3 +419,110 @@ def test_max_turns_stops_repeated_tool_calls(tmp_path):
 )
 def test_explicit_save_intent_is_conservative(message, expected):
     assert explicit_save_requested(message) is expected
+
+
+def test_async_turn_preserves_history_and_turn_limit():
+    import asyncio
+
+    from openai_agent_sdk.agent import run_agent_async
+
+    async def run():
+        model = ScriptedModel([[_answer("First")], [_answer("Second")]])
+        agent = build_agent(model=model)
+        first = await run_agent_async("Hello", agent=agent)
+        second = await run_agent_async("Again", first.history, agent=agent)
+        assert second.text == "Second"
+        assert second.history[:len(first.history)] == first.history
+        with pytest.raises(MaxTurnsExceeded):
+            await run_agent_async("Find jobs", max_turns=1, agent=build_agent(
+                model=ScriptedModel([
+                    [_call("search_jobs", {"query": "Python"}, "one")]
+                ])
+            ))
+
+    asyncio.run(run())
+
+
+def test_mcp_search_preserves_filters_fit_and_save_boundary(tmp_path, monkeypatch):
+    from openai_agent_sdk.jsearch import JSearchError
+
+    resume = tmp_path / "resume.md"
+    resume.write_text("Built Python services. Used SQL for analysis.")
+    stamp = "2026-10-10T00:00:00Z"
+
+    def job(job_id, remote):
+        return normalize_job({
+            "job_id": job_id, "job_title": "Python Engineer",
+            "employer_name": "Example", "job_country": "US",
+            "job_is_remote": remote,
+            "job_description": "Requirements: Python and SQL experience.",
+            "job_apply_link": f"https://example.com/{job_id}",
+        }, stamp)
+
+    class Adapter:
+        async def search(self, query, **options):
+            assert options == {"country": "us", "remote_only": True}
+            return {"source": "jsearch", "retrieved_at": stamp,
+                    "jobs": [job("keep", True), job("keep", True),
+                             job("exclude", False)]}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("MCP mode must not call mock or direct search")
+
+    monkeypatch.setattr("openai_agent_sdk.agent.search_job_records", forbidden)
+
+    def after_search(items):
+        output = json.loads(items[-1]["output"])
+        assert [job["id"] for job in output["jobs"]] == ["jsearch:keep"]
+        assert output["duplicates"][0]["reason"] == "provider_id"
+        assert output["excluded"][0]["id"] == "jsearch:exclude"
+        return [_call("assess_fit", {"job_id": "jsearch:keep"}, "fit")]
+
+    def after_fit(items):
+        assert "Built Python services." in repr(items)
+        return [_call("save_results", {"content": "jsearch:keep"}, "save")]
+
+    def after_save(items):
+        assert "Saving live jobs is not supported yet" in repr(items)
+        return [_answer("Checked without saving.")]
+
+    def after_old_fit(items):
+        assert "Search for this live job in the current turn first" in repr(items)
+        return [_answer("Search again.")]
+
+    model = ScriptedModel([
+        [_call("search_jobs", {"query": "Python"}, "search")],
+        after_search, after_fit, after_save,
+        [_call("assess_fit", {"job_id": "jsearch:keep"}, "old-fit")],
+        after_old_fit,
+    ])
+    agent = build_agent(model=model, provider="mcp", mcp_adapter=Adapter(),
+                        resume_path=resume, results_path=tmp_path / "results.md")
+    assert {tool.name for tool in agent.tools} == {
+        "search_jobs", "read_resume", "save_results", "assess_fit"
+    }
+    first = run_agent("Find remote Python jobs in the US and save results", agent=agent)
+    second = run_agent("Assess the previous job", first.history, agent=agent)
+    assert second.text == "Search again."
+    assert not (tmp_path / "results.md").exists()
+
+    class FailedAdapter:
+        async def search(self, *args, **kwargs):
+            raise JSearchError("Provider unavailable.")
+
+    def after_failure(items):
+        assert "Error: Provider unavailable." in repr(items)
+        return [_answer("Search failed.")]
+
+    failed_agent = build_agent(
+        provider="mcp", mcp_adapter=FailedAdapter(),
+        model=ScriptedModel([
+            [_call("search_jobs", {"query": "Python"}, "failed")], after_failure,
+        ]),
+    )
+    assert run_agent("Find Python jobs", agent=failed_agent).text == "Search failed."
+
+
+def test_mcp_requires_owned_session():
+    with pytest.raises(ValueError, match="open search session"):
+        build_agent(model="fake", provider="mcp")

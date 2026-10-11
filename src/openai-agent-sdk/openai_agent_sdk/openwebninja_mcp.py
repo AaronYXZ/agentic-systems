@@ -3,11 +3,14 @@
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 from mcp import ClientSession, MCPError, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
 from .jsearch import MAX_RESULTS, TIMEOUT_SECONDS, JSearchError, normalize_job
@@ -110,3 +113,23 @@ class OpenWebNinjaAdapter:
         except ValueError as exc:
             raise JSearchError("JSearch returned a malformed job record.") from exc
         return {"source": "jsearch", "retrieved_at": timestamp, "jobs": jobs}
+
+
+# Turn this async generator into a context manager for `async with`.
+@asynccontextmanager
+# Accept the provider key and yield one adapter. An empty key permits discovery.
+# AsyncIterator describes the yielded value, not a list of adapters.
+async def open_search_session(api_key: str = "") -> AsyncIterator[OpenWebNinjaAdapter]:
+    """Own one server process and connection, including cleanup after cancellation."""
+    # Configure and start the server. `read` receives messages; `write` sends them.
+    # The outer context closes the pipes and shuts down the server on exit.
+    async with stdio_client(server_parameters(api_key)) as (read, write):
+        # Create the MCP session over those pipes. This context closes the session.
+        async with ClientSession(read, write) as session:
+            # Complete the MCP handshake. Stop waiting after 15 seconds.
+            # `await` lets other tasks run while the server prepares its response.
+            await asyncio.wait_for(session.initialize(), timeout=15000)
+            # Discover and validate `jsearch`, then give its adapter to the caller.
+            # `yield` pauses here while the caller uses the open connection.
+            # Both contexts close when the caller exits, also on error or cancellation.
+            yield await OpenWebNinjaAdapter.discover(session)

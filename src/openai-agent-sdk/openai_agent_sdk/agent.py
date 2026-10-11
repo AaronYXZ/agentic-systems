@@ -1,5 +1,6 @@
 """One OpenAI Agents SDK agent over local job search tools."""
 
+import asyncio
 import json
 import os
 import re
@@ -27,11 +28,14 @@ from .contracts import (
     LiveJobPosting,
 )
 from .filtering import SearchCriteria, parse_criteria
+from .jsearch import JSearchError
 from .matching import assess_fit as assess_live_fit
+from .openwebninja_mcp import OpenWebNinjaAdapter
 from .tool_tracing import ToolTrace, traced_call
 from .tools import read_resume as read_resume_file
 from .tools import save_results as save_results_file
 from .tools import search_jobs as search_job_records
+from .tools.search_jobs import format_live_results, provider_request
 
 MAX_TURNS = 8
 _SAVE_VERB = r"(?:save|store|bookmark)"
@@ -88,6 +92,7 @@ def build_agent(
     results_path: Path = RESULTS_PATH,
     provider: str | None = None,
     jsearch_api_key: str | None = None,
+    mcp_adapter: OpenWebNinjaAdapter | None = None,
 ) -> Agent[JobAgentContext]:
     """Register three mock tools or four tools for opt-in JSearch search."""
     load_dotenv(PROJECT_ROOT / ".env")
@@ -100,8 +105,12 @@ def build_agent(
         "JSEARCH_API_KEY", ""
     )
 
+    if selected_provider == "mcp" and mcp_adapter is None:
+        raise ValueError("MCP mode requires an open search session.")
+    live_provider = selected_provider in {"jsearch", "mcp"}
+
     @function_tool
-    def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
+    async def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
         def operation() -> str:
             output = search_job_records(
@@ -117,6 +126,21 @@ def build_agent(
                 )
             return output
 
+        if selected_provider == "mcp":
+            if not query.strip():
+                return "Error: Search query cannot be empty."
+            provider_query, options = provider_request(query, ctx.context.criteria)
+            try:
+                result = await mcp_adapter.search(provider_query, **options)
+            except JSearchError as error:
+                return f"Error: {error}"
+            output = format_live_results(result, ctx.context.criteria)
+            if not output.startswith("Error:"):
+                ctx.context.searched_jobs.update(
+                    {job["id"]: job for job in json.loads(output)["jobs"]}
+                )
+            # shortcut: MCP search metadata is untraced until step 6 adds async tracing.
+            return output
         return traced_call(
             ctx, operation=operation,
             source=(selected_provider if selected_provider in {"mock", "jsearch"}
@@ -174,11 +198,11 @@ def build_agent(
             "skills as missing evidence, not absent skills. A strong status "
             "covers checked skills only, not the whole job. Saving live jobs "
             "is not supported yet.\n"
-            if selected_provider == "jsearch" else ""
+            if live_provider else ""
         ),
         model=model,
         tools=[search_jobs, read_resume, save_results] + (
-            [assess_fit] if selected_provider == "jsearch" else []
+            [assess_fit] if live_provider else []
         ),
     )
 
@@ -191,7 +215,21 @@ def run_agent(
     max_turns: int = MAX_TURNS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
 ) -> AgentTurn:
-    """Run one bounded agent turn and return its answer plus local history."""
+    """Synchronous entry point for callers that do not own an event loop."""
+    return asyncio.run(run_agent_async(
+        user_message, history, agent=agent, max_turns=max_turns, trace_sink=trace_sink
+    ))
+
+
+async def run_agent_async(
+    user_message: str,
+    history: list[TResponseInputItem] | None = None,
+    *,
+    agent: Agent[JobAgentContext] | None = None,
+    max_turns: int = MAX_TURNS,
+    trace_sink: Callable[[ToolTrace], None] | None = None,
+) -> AgentTurn:
+    """Run a bounded turn on the caller’s event loop for async tools."""
     if not user_message.strip():
         raise ValueError("User message cannot be empty.")
     if max_turns < 1:
@@ -208,7 +246,7 @@ def run_agent(
     )
     sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
     try:
-        result = Runner.run_sync(
+        result = await Runner.run(
             selected_agent, turn_input, context=context, max_turns=max_turns,
             run_config=RunConfig(
                 tracing_disabled=not sdk_tracing,

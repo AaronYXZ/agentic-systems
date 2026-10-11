@@ -287,9 +287,65 @@ object, so the adapter constructs the search arguments itself. It also accepts
 structured results and rejects malformed jobs or conflicting result forms.
 
 The server has no upstream HTTP timeout or cancellation support. The client
-deadline does not prove a paid request stopped. The CLI still uses mock or
-direct JSearch; connection lifecycle, CLI routing, and tracing belong to steps
-4–6. Live response parity remains unverified.
+deadline does not prove a paid request stopped. The CLI can select MCP; async search tracing remains step 6. Live response parity remains unverified.
 
 References: [official server](https://github.com/OpenWeb-Ninja/openwebninja-mcp),
 [operation manifest](https://github.com/OpenWeb-Ninja/openwebninja-mcp/blob/main/src/generated/manifest.ts).
+
+### V2-b step 4: connection ownership
+
+`open_search_session(api_key)` opens one server process and initialized MCP
+session. Its async context closes both on normal exit, startup failure, tool
+failure, or cancellation. It uses the MCP SDK's stdio cleanup, which closes
+stdin and terminates the process tree if the server does not exit.
+
+`run_mcp_cli(api_key=..., agent_fn=...)` keeps that connection open across turns.
+Both CLI entry points share one conversation loop. The supplied async turn
+function receives `(message, history, adapter)`. Terminal input runs on the main
+thread so interruption does not leave a blocked input worker. MCP background
+tasks pause while the user enters text; this CLI processes one turn at a time. Failed
+turns keep the previous history. Exit commands, EOF, and input interruption
+close the connection. `run_agent_async` supports the existing eight-turn limit
+on the same event loop. `run_agent` remains available for synchronous callers.
+
+The normal `job-agent` entry point selects this lifecycle when
+`JOB_SEARCH_PROVIDER=mcp`. Step 6 will trace async MCP search calls.
+No raw provider tools are exposed to the model.
+
+Discovery uses a 15-second initialization deadline. Tool discovery and search
+use eight-second client deadlines. Search requests one page, returns at most
+ten jobs, and never retries. The server still has no upstream HTTP timeout
+or cancellation guarantee. Initial package download and process cleanup can
+take longer than a request deadline.
+
+Run the offline lifecycle checks and discovery smoke check:
+
+```bash
+uv run pytest tests/test_mcp_lifecycle.py
+uv run python -m openai_agent_sdk.mcp_discovery
+```
+
+### V2-b step 5: MCP through the owned search tool
+
+Set these values in the ignored `.env`, then run `uv run job-agent`:
+
+```text
+JOB_SEARCH_PROVIDER=mcp
+OPENWEBNINJA_API_KEY=<your OpenWeb Ninja key>
+OPENAI_API_KEY=<your OpenAI key>
+```
+
+This is a live model and provider workflow. It keeps one MCP session open
+for the CLI conversation. The model sees `search_jobs`, `read_resume`,
+`assess_fit`, and `save_results`; it cannot choose a transport or call the
+server's subscription tool. MCP failures return errors without falling back
+to direct JSearch or mock data.
+
+HTTP and MCP share provider-query preparation, local filters, deduplication,
+and result formatting. Only retained jobs enter the current turn's searched
+job context. Fit checks require those jobs and local resume evidence. Saving
+live jobs remains blocked even when the user requests it.
+
+Local search-call metadata for MCP remains step 6. Other local tools retain
+their existing tracing. Account access, quotas, and live result parity remain
+unverified; implementation checks use a scripted model and fake MCP adapter.

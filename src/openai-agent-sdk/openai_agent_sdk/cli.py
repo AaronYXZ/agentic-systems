@@ -1,17 +1,19 @@
 """Interactive terminal loop for the single job search agent."""
 
+import asyncio
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 
 from agents import TResponseInputItem
 from dotenv import load_dotenv
 
-from openai_agent_sdk.agent import AgentTurn, run_agent
+from openai_agent_sdk.agent import AgentTurn, build_agent, run_agent, run_agent_async
 from openai_agent_sdk.contracts import PROJECT_ROOT
 from openai_agent_sdk.filtering import CriteriaError
+from openai_agent_sdk.openwebninja_mcp import OpenWebNinjaAdapter, open_search_session
 from openai_agent_sdk.tool_tracing import ToolTrace
 
 AgentFunction = Callable[[str, list[TResponseInputItem] | None], AgentTurn]
@@ -45,43 +47,94 @@ def run_cli(
     output_fn: Callable[[str], None] = print,
     agent_fn: AgentFunction = _run_live_turn,
 ) -> None:
-    """Keep a local conversation open until the user exits."""
+    """Run the shared loop with the existing synchronous agent callback."""
+    async def turn(message, history):
+        return await asyncio.to_thread(agent_fn, message, history)
+
+    asyncio.run(_run_cli_loop(input_fn, output_fn, turn))
+
+
+async def _run_cli_loop(
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    agent_fn: Callable[
+        [str, list[TResponseInputItem] | None], Awaitable[AgentTurn]
+    ],
+) -> None:
     history: list[TResponseInputItem] | None = None
     while True:
         try:
+            # Read on the main thread so Ctrl-C cannot leave a blocked input worker.
             message = input_fn("Job Agent > ").strip()
+            if message.lower() in {"exit", "quit"}:
+                break
+            if not message:
+                continue
+            try:
+                turn = await agent_fn(message, history)
+            except (ConfigurationError, CriteriaError) as error:
+                output_fn(f"Agent > {error}")
+                continue
+            except Exception:
+                output_fn(
+                    "Agent > Could not complete that turn. Check your API key, "
+                    "model, and local files, then try again."
+                )
+                continue
+            history = turn.history
+            output_fn(f"Agent > {turn.text}")
         except (EOFError, KeyboardInterrupt):
-            output_fn("Goodbye.")
-            return
+            break
+    output_fn("Goodbye.")
 
-        if message.lower() in {"exit", "quit"}:
-            output_fn("Goodbye.")
-            return
-        if not message:
-            continue
 
-        try:
-            turn = agent_fn(message, history)
-        except ConfigurationError as error:
-            output_fn(f"Agent > {error}")
-            continue
-        except CriteriaError as error:
-            output_fn(f"Agent > {error}")
-            continue
-        except Exception:
-            output_fn(
-                "Agent > Could not complete that turn. Check your API key, "
-                "model, and local files, then try again."
-            )
-            continue
+async def run_mcp_cli(
+    *,
+    agent_fn: Callable[
+        [str, list[TResponseInputItem] | None, OpenWebNinjaAdapter],
+        Awaitable[AgentTurn],
+    ],
+    api_key: str,
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+) -> None:
+    """Keep one connection for all turns. Provider routing is supplied by the caller."""
+    if not api_key.strip():
+        raise ConfigurationError("OPENWEBNINJA_API_KEY is missing.")
+    async with open_search_session(api_key) as adapter:
+        async def turn(message, history):
+            return await agent_fn(message, history, adapter)
 
-        history = turn.history
-        output_fn(f"Agent > {turn.text}")
+        await _run_cli_loop(input_fn, output_fn, turn)
 
 
 def main() -> None:
     """Run the CLI from the installed entry point or module."""
-    run_cli()
+    load_dotenv(PROJECT_ROOT / ".env")
+    if os.getenv("JOB_SEARCH_PROVIDER", "mock").strip().lower() != "mcp":
+        run_cli()
+        return
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        print(
+            "OPENAI_API_KEY is missing. Add it to .env and try again.", file=sys.stderr
+        )
+        return
+
+    async def turn(message, history, adapter):
+        local_tracing = os.getenv("JOB_AGENT_LOCAL_TRACING", "false").lower() == "true"
+        return await run_agent_async(
+            message, history, agent=build_agent(provider="mcp", mcp_adapter=adapter),
+            trace_sink=_print_trace if local_tracing else None,
+        )
+
+    try:
+        asyncio.run(run_mcp_cli(
+            api_key=os.getenv("OPENWEBNINJA_API_KEY", ""), agent_fn=turn,
+        ))
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+    except KeyboardInterrupt:
+        print("Goodbye.")
 
 
 if __name__ == "__main__":

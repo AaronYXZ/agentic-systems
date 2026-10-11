@@ -170,3 +170,23 @@ def test_invalid_explicit_filter_is_shown_and_cli_recovers():
         "Goodbye.",
     ]
     assert calls[1][1] is None
+
+
+def test_main_selects_mcp_from_configuration(monkeypatch):
+    from openai_agent_sdk.cli import main
+
+    calls = []
+
+    async def cli(*, api_key, agent_fn):
+        calls.append(api_key)
+
+    monkeypatch.setattr("openai_agent_sdk.cli.load_dotenv", lambda path: None)
+    monkeypatch.setenv("JOB_SEARCH_PROVIDER", "mcp")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-model-key")
+    monkeypatch.setenv("OPENWEBNINJA_API_KEY", "test-provider-key")
+    monkeypatch.setattr("openai_agent_sdk.cli.run_mcp_cli", cli)
+    monkeypatch.setattr(
+        "openai_agent_sdk.cli.run_cli", lambda: pytest.fail("No fallback")
+    )
+    main()
+    assert calls == ["test-provider-key"]
