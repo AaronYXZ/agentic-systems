@@ -502,6 +502,9 @@ def test_mcp_search_preserves_filters_fit_and_save_boundary(tmp_path, monkeypatc
         "search_jobs", "read_resume", "save_results", "assess_fit"
     }
     first = run_agent("Find remote Python jobs in the US and save results", agent=agent)
+    search_trace = next(t for t in first.tool_traces if t.call_id == "search")
+    assert search_trace.source == "mcp"
+    assert search_trace.outcome == "success"
     second = run_agent("Assess the previous job", first.history, agent=agent)
     assert second.text == "Search again."
     assert not (tmp_path / "results.md").exists()
@@ -520,7 +523,13 @@ def test_mcp_search_preserves_filters_fit_and_save_boundary(tmp_path, monkeypatc
             [_call("search_jobs", {"query": "Python"}, "failed")], after_failure,
         ]),
     )
-    assert run_agent("Find Python jobs", agent=failed_agent).text == "Search failed."
+    failed_turn = run_agent("Find Python jobs", agent=failed_agent)
+    assert failed_turn.text == "Search failed."
+    trace, = failed_turn.tool_traces
+    assert (trace.call_id, trace.source, trace.error_class) == (
+        "failed", "mcp", "JSearchError"
+    )
+    assert "Provider unavailable" not in repr(trace)
 
 
 def test_mcp_requires_owned_session():

@@ -287,7 +287,7 @@ object, so the adapter constructs the search arguments itself. It also accepts
 structured results and rejects malformed jobs or conflicting result forms.
 
 The server has no upstream HTTP timeout or cancellation support. The client
-deadline does not prove a paid request stopped. The CLI can select MCP; async search tracing remains step 6. Live response parity remains unverified.
+deadline does not prove a paid request stopped. The CLI can select MCP; async search tracing is implemented in step 6. Live response parity remains unverified.
 
 References: [official server](https://github.com/OpenWeb-Ninja/openwebninja-mcp),
 [operation manifest](https://github.com/OpenWeb-Ninja/openwebninja-mcp/blob/main/src/generated/manifest.ts).
@@ -309,7 +309,7 @@ close the connection. `run_agent_async` supports the existing eight-turn limit
 on the same event loop. `run_agent` remains available for synchronous callers.
 
 The normal `job-agent` entry point selects this lifecycle when
-`JOB_SEARCH_PROVIDER=mcp`. Step 6 will trace async MCP search calls.
+`JOB_SEARCH_PROVIDER=mcp`. Step 6 traces awaited MCP search calls.
 No raw provider tools are exposed to the model.
 
 Discovery uses a 15-second initialization deadline. Tool discovery and search
@@ -346,6 +346,19 @@ and result formatting. Only retained jobs enter the current turn's searched
 job context. Fit checks require those jobs and local resume evidence. Saving
 live jobs remains blocked even when the user requests it.
 
-Local search-call metadata for MCP remains step 6. Other local tools retain
-their existing tracing. Account access, quotas, and live result parity remain
+MCP searches use the existing local metadata trace format. Other local tools
+retain their existing tracing. Account access, quotas, and live result parity remain
 unverified; implementation checks use a scripted model and fake MCP adapter.
+
+### V2-b step 6: awaited MCP search tracing
+
+Set `JOB_AGENT_LOCAL_TRACING=true` to print metadata records to stderr. MCP
+search uses `source=mcp` and the SDK tool call ID. Duration includes the awaited
+request and local result processing. A provider exception records its class
+before the search wrapper returns a safe error. Cancellation also records an
+error and continues to propagate so session cleanup can run.
+
+Records contain only tool name, call ID, duration, outcome, source, and error
+class. They exclude credentials, arguments, job descriptions, resume text,
+result content, and exception messages. SDK export remains independently
+controlled by `JOB_AGENT_SDK_TRACING`, with sensitive payloads disabled.

@@ -31,7 +31,7 @@ from .filtering import SearchCriteria, parse_criteria
 from .jsearch import JSearchError
 from .matching import assess_fit as assess_live_fit
 from .openwebninja_mcp import OpenWebNinjaAdapter
-from .tool_tracing import ToolTrace, traced_call
+from .tool_tracing import ToolTrace, traced_call, traced_call_async
 from .tools import read_resume as read_resume_file
 from .tools import save_results as save_results_file
 from .tools import search_jobs as search_job_records
@@ -127,20 +127,24 @@ def build_agent(
             return output
 
         if selected_provider == "mcp":
-            if not query.strip():
-                return "Error: Search query cannot be empty."
-            provider_query, options = provider_request(query, ctx.context.criteria)
-            try:
+            async def mcp_operation() -> str:
+                if not query.strip():
+                    return "Error: Search query cannot be empty."
+                provider_query, options = provider_request(query, ctx.context.criteria)
                 result = await mcp_adapter.search(provider_query, **options)
+                output = format_live_results(result, ctx.context.criteria)
+                if not output.startswith("Error:"):
+                    ctx.context.searched_jobs.update(
+                        {job["id"]: job for job in json.loads(output)["jobs"]}
+                    )
+                return output
+
+            try:
+                return await traced_call_async(
+                    ctx, source="mcp", operation=mcp_operation
+                )
             except JSearchError as error:
                 return f"Error: {error}"
-            output = format_live_results(result, ctx.context.criteria)
-            if not output.startswith("Error:"):
-                ctx.context.searched_jobs.update(
-                    {job["id"]: job for job in json.loads(output)["jobs"]}
-                )
-            # shortcut: MCP search metadata is untraced until step 6 adds async tracing.
-            return output
         return traced_call(
             ctx, operation=operation,
             source=(selected_provider if selected_provider in {"mock", "jsearch"}
