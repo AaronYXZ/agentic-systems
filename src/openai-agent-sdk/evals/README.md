@@ -27,6 +27,7 @@ LLM judge, or async pytest plugin is needed for these observable contracts.
 | `partial-fit` | Python evidence matches; SQL stays unverified; exact source excerpts and job ID appear in the answer; no save call. |
 | `tool-order` | Search output must return the retained job before `assess_fit` uses it; the excluded job and saving are forbidden. |
 | `search-arguments` | Six cases check the model's raw skill query and the provider's US or city and remote filters. |
+| `answer-grounding` | The answer includes exact job and resume excerpts and does not add AWS experience. |
 
 Fixtures are versioned JSON files. Each run uses a temporary fictional resume
 and results path. The fixed provider makes no HTTP or MCP server calls.
@@ -40,7 +41,7 @@ From `src/openai-agent-sdk/`:
 # Offline evaluations and grader checks. Verbose output identifies cases.
 RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_eval_example.py tests/test_eval_scenarios.py tests/test_eval_agent_behavior.py -m 'not integration' -v
 
-# Eleven real-model evaluations. Requires OPENAI_API_KEY; may incur charges.
+# Twelve real-model evaluations. Requires OPENAI_API_KEY; may incur charges.
 # OPENAI_MODEL selects the model, using the agent's normal default if unset.
 RUN_LIVE_AGENT_EVAL=1 uv run pytest tests/test_eval_example.py tests/test_eval_scenarios.py tests/test_eval_agent_behavior.py -m integration -v -s
 
@@ -57,7 +58,7 @@ is not evidence of a model-quality regression.
 
 Scripted passes establish tool and policy behavior under predetermined calls.
 They do not establish that a real model chooses the right calls or answers.
-Live passes establish behavior on these eleven fixtures for that run only.
+Live passes establish behavior on these twelve fixtures for that run only.
 Exact excerpts and the requested no-match phrase deliberately make the answer
 checks narrow and reproducible. They do not grade general answer quality,
 detect every unsupported claim, or establish production reliability.

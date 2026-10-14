@@ -106,6 +106,18 @@ def grade_search_arguments(
     ), "The provider must receive the user's hard filters."
 
 
+def grade_answer_grounding(turn: AgentTurn, case: dict) -> None:
+    resume_excerpt = case["expected_resume_excerpt"]
+    job_excerpt = case["expected_job_excerpt"]
+    assert resume_excerpt in case["resume"]
+    assert any(job_excerpt in job["job_description"] for job in case["jobs"])
+    assert resume_excerpt in turn.text, "The answer must quote the resume."
+    assert job_excerpt in turn.text, "The answer must quote the job."
+    assert not re.search(
+        rf"\b{re.escape(case['unsupported_term'])}\b", turn.text, re.IGNORECASE
+    ), "The answer must not add unsupported experience."
+
+
 SEARCH = {"type": "function_call", "name": "search_jobs", "call_id": "search"}
 RESULT = {
     "type": "function_call_output", "call_id": "search",
@@ -270,3 +282,79 @@ def test_search_arguments_with_real_model(case, tmp_path, monkeypatch):
     )
     assert not results.exists()
     print(f"Case {case['id']} / {model_name}: passed. Provider calls: {provider_calls}")
+
+
+@pytest.mark.parametrize(
+    ("answer", "valid"),
+    [
+        pytest.param(
+            "jsearch:grounding-001 fits: Built Python services. "
+            "Required: Python experience.", True, id="grounded",
+        ),
+        pytest.param(
+            "jsearch:grounding-001 fits. Required: Python experience.",
+            False, id="missing-resume-excerpt",
+        ),
+        pytest.param(
+            "jsearch:grounding-001 fits. Built Python services.",
+            False, id="missing-job-excerpt",
+        ),
+        pytest.param(
+            "Built Python services. Required: Python experience. "
+            "The candidate also has AWS experience.",
+            False, id="invented-aws",
+        ),
+    ],
+)
+def test_answer_grounding_grader(answer, valid):
+    """Model: none. Check four synthetic answers for the grounding rule.
+
+    `answer` supplies exact quotes or omits one; `valid` marks the grounded
+    answer and three failures, including an unsupported AWS claim.
+    """
+    case = json.loads((CASE_DIR / "answer-grounding.json").read_text(encoding="utf-8"))
+    turn = AgentTurn(text=answer, history=[])
+    if valid:
+        grade_answer_grounding(turn, case)
+    else:
+        with pytest.raises(AssertionError):
+            grade_answer_grounding(turn, case)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "case_index", range(4), ids=["basic", "two-skills", "two-jobs", "excluded-job"]
+)
+def test_answer_grounding_with_real_model(case_index, tmp_path, monkeypatch):
+    """Model: configured OpenAI model. Grade four grounding cases when opted in.
+
+    `case_index` selects the basic, two-skill, two-job, or excluded-job case.
+    Each answer needs exact source text, the requested IDs, and no saved file.
+    """
+    if os.getenv("RUN_LIVE_AGENT_EVAL") != "1":
+        pytest.skip("Set RUN_LIVE_AGENT_EVAL=1 to allow paid model calls.")
+    load_dotenv(PROJECT_ROOT / ".env")
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        pytest.fail("OPENAI_API_KEY is required for the live model eval.")
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
+    data = json.loads((CASE_DIR / "answer-grounding.json").read_text(encoding="utf-8"))
+    cases = [data, *data["additional_cases"]]
+    assert len(cases) == 4
+    case = cases[case_index]
+    turn, results, model_name, _ = run_case(case, tmp_path)
+    grade_answer_grounding(turn, case)
+    assert f"jsearch:{case['jobs'][0]['job_id']}" in turn.text
+    for evidence in case.get("required_evidence", []):
+        assert evidence["resume_excerpt"] in case["resume"]
+        assert any(
+            f"jsearch:{job['job_id']}" == evidence["job_id"]
+            and evidence["job_excerpt"] in job["job_description"]
+            for job in case["jobs"]
+        )
+        assert evidence["job_id"] in turn.text
+        assert evidence["resume_excerpt"] in turn.text
+        assert evidence["job_excerpt"] in turn.text
+    for job_id in case.get("excluded_job_ids", []):
+        assert job_id not in turn.text
+    assert not results.exists()
+    print(f"Case {case['id']} / {model_name}: passed. Answer: {turn.text}")

@@ -1,0 +1,111 @@
+{
+  "id": "answer-grounding",
+  "request": "Find a remote Python job in the US. Explain the fit using exact text from the job and my resume. Include the job ID. Do not save anything.",
+  "resume": "Built Python services.",
+  "jobs": [
+    {
+      "job_id": "grounding-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Grounding Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/grounding-001",
+      "job_is_remote": true,
+      "job_country": "US"
+    }
+  ],
+  "expected_resume_excerpt": "Built Python services.",
+  "expected_job_excerpt": "Required: Python experience.",
+  "unsupported_term": "AWS",
+  "additional_cases": [
+    {
+      "id": "answer-grounding-two-skills",
+      "request": "Find a remote Python and SQL job in the US. Explain each skill match using exact text from the job and my resume. Include the job ID. Do not save anything.",
+      "resume": "Built Python services.\nBuilt SQL dashboards.",
+      "jobs": [
+        {
+          "job_id": "grounding-002",
+          "job_title": "Data Engineer",
+          "employer_name": "Example Data Company",
+          "job_description": "Required: Python experience.\nRequired: SQL experience.",
+          "job_apply_link": "https://example.com/jobs/grounding-002",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "expected_resume_excerpt": "Built Python services.",
+      "expected_job_excerpt": "Required: Python experience.",
+      "unsupported_term": "AWS",
+      "required_evidence": [
+        {
+          "job_id": "jsearch:grounding-002",
+          "resume_excerpt": "Built SQL dashboards.",
+          "job_excerpt": "Required: SQL experience."
+        }
+      ]
+    },
+    {
+      "id": "answer-grounding-two-jobs",
+      "request": "Find two remote jobs in the US, one for Python and one for Kubernetes. Explain the fit for each with exact text from the job and my resume. Include both job IDs. Do not save anything.",
+      "resume": "Built Python services.\nOperated Kubernetes clusters.",
+      "jobs": [
+        {
+          "job_id": "grounding-003",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Software Company",
+          "job_description": "Required: Python experience.",
+          "job_apply_link": "https://example.com/jobs/grounding-003",
+          "job_is_remote": true,
+          "job_country": "US"
+        },
+        {
+          "job_id": "grounding-004",
+          "job_title": "Platform Engineer",
+          "employer_name": "Example Platform Company",
+          "job_description": "Required: Kubernetes experience.",
+          "job_apply_link": "https://example.com/jobs/grounding-004",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "expected_resume_excerpt": "Built Python services.",
+      "expected_job_excerpt": "Required: Python experience.",
+      "unsupported_term": "AWS",
+      "required_evidence": [
+        {
+          "job_id": "jsearch:grounding-004",
+          "resume_excerpt": "Operated Kubernetes clusters.",
+          "job_excerpt": "Required: Kubernetes experience."
+        }
+      ]
+    },
+    {
+      "id": "answer-grounding-excluded-job",
+      "request": "Find remote Python jobs in the US. Explain the fit with exact text from the job and my resume. Include the job ID. Do not mention excluded jobs or save anything.",
+      "resume": "Built Python APIs for customers.",
+      "jobs": [
+        {
+          "job_id": "grounding-005",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Remote Company",
+          "job_description": "Required: Python API experience.",
+          "job_apply_link": "https://example.com/jobs/grounding-005",
+          "job_is_remote": true,
+          "job_country": "US"
+        },
+        {
+          "job_id": "grounding-006",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Office Company",
+          "job_description": "Required: Python experience. Office attendance required.",
+          "job_apply_link": "https://example.com/jobs/grounding-006",
+          "job_is_remote": false,
+          "job_country": "US"
+        }
+      ],
+      "expected_resume_excerpt": "Built Python APIs for customers.",
+      "expected_job_excerpt": "Required: Python API experience.",
+      "unsupported_term": "AWS",
+      "excluded_job_ids": ["jsearch:grounding-006"]
+    }
+  ]
+}

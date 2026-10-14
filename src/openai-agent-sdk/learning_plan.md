@@ -345,6 +345,9 @@ role filter to a bad model query before it reaches the provider.
 
 ### Step 3. Answer grounding
 
+**Status:** The case, exact-excerpt grader, and four offline grader examples
+are implemented. The real-model case is available but has not been run.
+
 **Focus:** A fit claim must cite text from the returned job and the resume.
 Use exact source excerpts for the first grader. Review other prose claims by
 hand until a structured claim format exists.
@@ -356,16 +359,22 @@ source mentions AWS. Ask for a fit explanation with exact excerpts.
 **Testing code:**
 
 ``` python
+def grade_answer_grounding(turn, case):
+    assert case["expected_resume_excerpt"] in turn.text
+    assert case["expected_job_excerpt"] in turn.text
+    assert "aws" not in turn.text.casefold()
+
+
 @pytest.mark.integration
-def test_answer_grounding(tmp_path, monkeypatch):
+def test_answer_grounding_with_real_model(tmp_path, monkeypatch):
     case = load_case("answer-grounding")
     turn, _, _ = run_live_case(case, tmp_path, monkeypatch)
-    assert "Built Python services." in turn.text
-    assert "Required: Python experience." in turn.text
-    assert "AWS experience" not in turn.text
+    grade_answer_grounding(turn, case)
 ```
 
-**Command:** `RUN_LIVE_AGENT_EVAL=1 uv run pytest tests/test_eval_agent_behavior.py -k test_answer_grounding -v`
+**Offline command:** `RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_eval_agent_behavior.py -m 'not integration' -k test_answer_grounding_grader -v`
+
+Run the opt-in real-model case separately when model calls are authorized.
 
 ### Step 4. Uncertainty
 
