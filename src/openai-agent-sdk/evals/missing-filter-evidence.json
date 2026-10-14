@@ -1,0 +1,31 @@
+{
+  "id": "missing-filter-evidence",
+  "request": "Find remote Python jobs in the US. Include job IDs if any qualify. If none qualify, say \"No matching jobs\". Do not save anything.",
+  "resume": "Built Python services.",
+  "jobs": [
+    {
+      "job_id": "remote-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/remote-001",
+      "job_country": "US"
+    },
+    {
+      "job_id": "unknown-country",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/remote-001",
+      "job_is_remote": true,
+      "job_country": null
+    }
+  ],
+  "expected_job_ids": [],
+  "expected_duplicates": [],
+  "expected_excluded": [
+    "jsearch:remote-001",
+    "jsearch:unknown-country"
+  ],
+  "expected_fit": null
+}

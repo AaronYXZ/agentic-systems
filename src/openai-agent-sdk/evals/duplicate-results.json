@@ -1,0 +1,39 @@
+{
+  "id": "duplicate-results",
+  "request": "Find remote Python jobs in the US. Assess fit for every returned job. Include job IDs and source excerpts. Do not save anything.",
+  "resume": "Built Python services.",
+  "jobs": [
+    {
+      "job_id": "remote-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/remote-001",
+      "job_is_remote": true,
+      "job_country": "US"
+    },
+    {
+      "job_id": "remote-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/remote-001",
+      "job_is_remote": true,
+      "job_country": "US"
+    }
+  ],
+  "expected_job_ids": [
+    "jsearch:remote-001"
+  ],
+  "expected_duplicates": [
+    "jsearch:remote-001"
+  ],
+  "expected_excluded": [],
+  "expected_fit": {
+    "status": "strong",
+    "matched": [
+      "Python"
+    ],
+    "unverified": []
+  }
+}

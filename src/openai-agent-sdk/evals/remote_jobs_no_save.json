@@ -1,0 +1,26 @@
+{
+  "id": "remote-jobs-no-save",
+  "request": "Find remote Python jobs in the US. Include job IDs. Do not save anything.",
+  "resume": "Built Python services.",
+  "jobs": [
+    {
+      "job_id": "remote-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/remote-001",
+      "job_is_remote": true,
+      "job_country": "US"
+    },
+    {
+      "job_id": "office-002",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Office Company",
+      "job_description": "Required: Python experience. Office attendance required.",
+      "job_apply_link": "https://example.com/jobs/office-002",
+      "job_is_remote": false,
+      "job_country": "US"
+    }
+  ],
+  "expected_job_ids": ["jsearch:remote-001"]
+}
