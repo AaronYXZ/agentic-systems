@@ -1,0 +1,141 @@
+{
+  "cases": [
+    {
+      "id": "search-arguments",
+      "request": "Find remote Python jobs in the US. Include job IDs and explain fit. Do not save anything. Filters: role=Python",
+      "resume": "Built Python services.",
+      "jobs": [
+        {
+          "job_id": "python-001",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Python Company",
+          "job_description": "Required: Python experience.",
+          "job_apply_link": "https://example.com/jobs/python-001",
+          "job_is_remote": true,
+          "job_country": "US"
+        },
+        {
+          "job_id": "java-002",
+          "job_title": "Java Engineer",
+          "employer_name": "Example Java Company",
+          "job_description": "Required: Java experience.",
+          "job_apply_link": "https://example.com/jobs/java-002",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "expected_query_term": "python",
+      "expected_provider_options": {
+        "country": "us",
+        "remote_only": true
+      }
+    },
+    {
+      "id": "sql-us-any-location",
+      "request": "Find SQL analyst jobs in the US. Include job IDs. Do not save anything. Filters: role=Data Analyst",
+      "resume": "Built SQL dashboards.",
+      "jobs": [
+        {
+          "job_id": "sql-003",
+          "job_title": "Data Analyst",
+          "employer_name": "Example Data Company",
+          "job_description": "Required: SQL experience.",
+          "job_apply_link": "https://example.com/jobs/sql-003",
+          "job_is_remote": false,
+          "job_country": "US"
+        }
+      ],
+      "expected_query_term": "sql",
+      "expected_provider_options": {
+        "country": "us",
+        "remote_only": false
+      }
+    },
+    {
+      "id": "java-toronto-remote",
+      "request": "Find remote Java jobs in Toronto. Include job IDs. Do not save anything. Filters: location=Toronto; role=Java",
+      "resume": "Built Java services.",
+      "jobs": [
+        {
+          "job_id": "java-004",
+          "job_title": "Java Engineer",
+          "employer_name": "Example Toronto Company",
+          "job_description": "Required: Java experience.",
+          "job_apply_link": "https://example.com/jobs/java-004",
+          "job_location": "Toronto, Canada",
+          "job_is_remote": true,
+          "job_country": "CA"
+        }
+      ],
+      "expected_query_term": "java",
+      "expected_provider_options": {
+        "country": null,
+        "remote_only": true
+      }
+    },
+    {
+      "id": "rust-us-any-location",
+      "request": "Find Rust engineer jobs in the US. Include job IDs. Do not save anything. Filters: role=Rust",
+      "resume": "Built services in Rust.",
+      "jobs": [
+        {
+          "job_id": "rust-005",
+          "job_title": "Rust Engineer",
+          "employer_name": "Example Systems Company",
+          "job_description": "Required: Rust experience.",
+          "job_apply_link": "https://example.com/jobs/rust-005",
+          "job_is_remote": false,
+          "job_country": "US"
+        }
+      ],
+      "expected_query_term": "rust",
+      "expected_provider_options": {
+        "country": "us",
+        "remote_only": false
+      }
+    },
+    {
+      "id": "kubernetes-berlin-remote",
+      "request": "Find remote Kubernetes jobs in Berlin. Include job IDs. Do not save anything. Filters: location=Berlin; skills=Kubernetes",
+      "resume": "Operated Kubernetes clusters.",
+      "jobs": [
+        {
+          "job_id": "kubernetes-006",
+          "job_title": "Platform Engineer",
+          "employer_name": "Example Berlin Company",
+          "job_description": "Required: Kubernetes experience.",
+          "job_apply_link": "https://example.com/jobs/kubernetes-006",
+          "job_location": "Berlin, Germany",
+          "job_is_remote": true,
+          "job_country": "DE"
+        }
+      ],
+      "expected_query_term": "kubernetes",
+      "expected_provider_options": {
+        "country": null,
+        "remote_only": true
+      }
+    },
+    {
+      "id": "typescript-us-explicit-remote",
+      "request": "Find TypeScript frontend jobs in the US. Include job IDs. Do not save anything. Filters: role=Frontend; remote=true",
+      "resume": "Built TypeScript interfaces.",
+      "jobs": [
+        {
+          "job_id": "typescript-007",
+          "job_title": "Frontend Engineer",
+          "employer_name": "Example Web Company",
+          "job_description": "Required: TypeScript experience.",
+          "job_apply_link": "https://example.com/jobs/typescript-007",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "expected_query_term": "typescript",
+      "expected_provider_options": {
+        "country": "us",
+        "remote_only": true
+      }
+    }
+  ]
+}
