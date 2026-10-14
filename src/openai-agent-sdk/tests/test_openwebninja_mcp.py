@@ -81,7 +81,15 @@ def test_incompatible_schema_prevents_search():
     assert not session.calls
 
 
-@pytest.mark.parametrize("payload", [{}, {"data": {"jobs": [{"job_id": "bad"}]}}])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"data": []},
+        {"data": {"jobs": {}}},
+        {"data": {"jobs": [{"job_id": "bad"}]}},
+    ],
+)
 def test_invalid_jobs_rejected(payload):
     with pytest.raises(JSearchError):
         search(Session(payload))
@@ -107,3 +115,62 @@ def test_structured_content_and_safe_provider_errors():
                 structured_content=payload,
             )
         )
+
+
+@pytest.mark.parametrize("case", ["missing", "duplicate", "paginated", "operation"])
+def test_discovery_mismatch_never_calls_search(case):
+    class ChangedSession(Session):
+        async def list_tools(self):
+            schema = (
+                SCHEMA
+                if case != "operation"
+                else {
+                    **SCHEMA,
+                    "properties": {
+                        **SCHEMA["properties"],
+                        "operation": {"enum": ["search"]},
+                    },
+                }
+            )
+            tool = Tool(name="jsearch", input_schema=schema)
+            tools = [] if case == "missing" else [tool]
+            if case == "duplicate":
+                tools.append(tool)
+            return ListToolsResult(
+                tools=tools, next_cursor="next" if case == "paginated" else None
+            )
+
+    session = ChangedSession({})
+    with pytest.raises(JSearchError, match="schema"):
+        search(session)
+    assert not session.calls
+
+
+def test_mcp_and_http_normalize_identical_fixture():
+    from io import BytesIO
+
+    from openai_agent_sdk.jsearch import search_jsearch
+
+    payload = {"data": {"jobs": [JOB]}}
+    mcp_result = search(Session(payload))
+    direct_result = search_jsearch(
+        "Python",
+        api_key="fake",
+        opener=lambda *args, **kwargs: BytesIO(json.dumps(payload).encode()),
+        retrieved_at=mcp_result["retrieved_at"],
+        country="us",
+        remote_only=True,
+    )
+    assert mcp_result == direct_result
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        CallToolResult(content=[TextContent(type="text", text="not JSON")]),
+        CallToolResult(content=[TextContent(type="text", text="[]")]),
+    ],
+)
+def test_invalid_result_content_is_safe(response):
+    with pytest.raises(JSearchError, match="invalid response"):
+        decode_result(response)
