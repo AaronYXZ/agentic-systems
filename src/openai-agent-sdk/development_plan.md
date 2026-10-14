@@ -408,9 +408,9 @@ run with a configured key.
 V2 Steps 1 through 7 are implemented with JSearch as an opt-in source. V2
 Step 8 and all V3 steps remain plans. Complete the remaining
 live V1 acceptance checks before replacing the mock search path. Keep the V1
-deterministic tests as regression tests. A possible V4 long-running agent is
-not planned here. FastAPI, deployment, notifications, and background
-scheduling are not V2 or V3 work.
+deterministic tests as regression tests. FastAPI, deployment, notifications,
+and background scheduling are not V2 or V3 work. The future direction below
+describes later milestones without expanding those versions.
 
 ### V2. Real Tools
 
@@ -576,8 +576,8 @@ retain their class name. Live SDK export acceptance remains part of Step 8.
 Status: Option B selected. Step 1 search contract is checked against the pinned
 package. Steps 2 and 3 provide stdio configuration and a tested standalone adapter.
 Steps 4 and 5 add session ownership, an async CLI loop, and provider routing.
-Account access and quotas remain unverified. Step 7 and V2 Step 8
-live acceptance remain pending. The CLI uses MCP when JOB_SEARCH_PROVIDER=mcp.
+Account access and quotas remain unverified. Step 7 offline verification and opt-in acceptance tooling are implemented.
+V2-b live acceptance and V2 Step 8 remain pending. The CLI uses MCP when JOB_SEARCH_PROVIDER=mcp.
 
 Outcome: call JSearch through MCP while preserving the existing application
 behavior. MCP defines how the application calls tools. The MCP server still
@@ -675,7 +675,7 @@ Verification: 105 SDK tests, 15 root tests, and the root Ruff check passed.
 The discovery-only command started the pinned server, validated its schema,
 and closed the connection without provider calls.
 Step 1 account access and quota checks remain pending. The server has no upstream
-HTTP deadline or cancellation support. Step 7 remains future work.
+HTTP deadline or cancellation support. Step 7 tooling is implemented; live acceptance remains pending.
 
 Step 4 implementation: `open_search_session` owns initialization, discovery,
 and stdio cleanup. Both CLI entry points share one conversation loop.
@@ -701,6 +701,15 @@ are recorded before conversion to tool error text. No raw content or error
 messages enter records. Cancellation is recorded and re-raised. SDK tracing
 configuration remains independent. Offline checks cover success, reported
 errors, exceptions, cancellation, duration, correlation, and content exclusion.
+
+Step 7 implementation: offline fixtures check discovery drift, malformed
+content, and normalized parity with HTTP. Existing tests cover filters,
+duplicates, fit checks, errors, timeout, traces, and cleanup. The standalone
+`mcp_acceptance --live` command makes one provider search and records metadata.
+`--compare-direct` separately enables one RapidAPI comparison request. No model
+calls or automatic subscriptions occur. Live acceptance remains pending, with
+an observed eight-second MCP timeout from manual debugging. See the README
+for known transport differences and commands.
 
 1. **Confirm provider access and the search contract.** Check the OpenWeb Ninja
    account, JSearch access, quotas, and required search operation. Compare its
@@ -811,4 +820,84 @@ notifications, web service, or deployment belongs in V3.
 - Run offline tests and repository quality checks. Document database location,
   backup, privacy, and reset procedures before declaring V3 complete.
 - Exit evidence: new and seen jobs, recommendations, searches, and run
-  history survive restart. No V4 background process has been introduced.
+  history survive restart. No background process has been introduced.
+
+### Future development direction
+
+Status: future planning only. Introduce one major concept per milestone.
+Complete the preceding acceptance checks before adding more autonomy.
+
+Evolution path: **CLI -> FastAPI -> persistent agent**.
+
+Here, a persistent agent means a worker that can resume durable runs and
+continue approved work after a client disconnects or the worker restarts.
+Saving conversation history alone does not provide this behavior.
+
+#### Stage 1. CLI with memory and state
+
+- Complete V3 persistence while keeping the interactive CLI as the interface.
+- Separate execution state from memory. Execution state records the current
+  step, tool results, pending decisions, and run status. Memory stores selected
+  information for later runs, such as user-approved search preferences.
+- Define typed state, versioned storage, and explicit transitions for running,
+  waiting for approval, completed, failed, and cancelled runs.
+- Give memory a source, timestamp, scope, and retention rule. Support inspection,
+  correction, and deletion. Do not treat model-generated summaries as verified facts.
+- Exit evidence: restart tests recover state once, preserve approved preferences,
+  and prevent information from leaking between conversations.
+
+#### Stage 2. FastAPI interface
+
+- Reuse the agent service behind the CLI. Add an HTTP interface for starting
+  runs, reading status, retrieving results, and requesting cancellation.
+- Define request and response contracts, authentication, and ownership checks
+  for conversations and runs before supporting multiple users.
+- Keep run execution separate from HTTP request handling. Define whether a
+  client disconnect cancels a run or leaves it active.
+- Add bounded concurrency, request limits, timeouts, and structured error responses.
+- Exit evidence: API tests cover ownership, duplicate requests, cancellation,
+  failures, and the same search and fit behavior as the CLI.
+
+#### Stage 3. Persistent agent execution
+
+- Add a durable work queue and worker only after the HTTP service is verified.
+  Store checkpoints so a worker can resume after a crash.
+- Define retry limits, deadlines, budgets, and termination conditions. Use
+  idempotency keys and transactions to prevent repeated side effects during replay.
+- Add scheduling and notifications as separate later lessons. Require explicit
+  user configuration for recurring work, cost limits, and notification destinations.
+- Exit evidence: crash and restart tests resume approved work without duplicate
+  writes. Cancelled, expired, and completed runs do not continue executing.
+
+#### Sandbox controls
+
+- Define a sandbox before adding tools that execute code or access broader files.
+  A sandbox restricts what a tool process can access and consume.
+- Allow only required paths, network destinations, and operations. Separate
+  credentials from tool-visible data. Bound CPU, memory, runtime, and output size.
+- Apply the restrictions outside model instructions. MCP is a tool protocol,
+  not a sandbox. A local stdio process still needs explicit access controls.
+- Exit evidence: deterministic checks reject prohibited file and network access,
+  stop excessive resource use, and allow the intended tool operation.
+
+#### Human-in-the-loop controls (HITL)
+
+- Retain the existing explicit save gate. Add durable approval requests before
+  future high-impact actions, such as submitting an application or sending a message.
+- Present the exact proposed action and relevant evidence for approval. Bind
+  approval to the user, run, action parameters, and expiry time.
+- Pause execution while approval is pending. Support approve, reject, cancel,
+  and expire transitions. Changed action parameters require a new approval.
+- Enforce approval through deterministic policy checks. The model cannot approve
+  its own action. Keep an audit record without unrestricted sensitive content.
+- Exit evidence: tests prove that missing, rejected, expired, or mismatched
+  approvals block execution. Restart tests preserve the pending approval state.
+
+#### Evaluation gate for later capabilities
+
+- Keep offline behavioral tests for filtering, fit evidence, privacy, recovery,
+  approval, and termination. Enable live acceptance explicitly.
+- Track failures, latency, and cost against a fixed evaluation set before
+  changing autonomy. Add multiple agents only if evaluation shows an advantage.
+- Run isolated project tests and repository Ruff and pytest checks for each
+  implementation milestone. Record observed results and remaining limitations.

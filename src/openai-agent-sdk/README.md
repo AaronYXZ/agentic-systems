@@ -202,13 +202,19 @@ second = run_agent("Save the first result", history=first.history)
 print(second.text)
 ```
 
-`run_agent` uses the OpenAI Agents SDK runner with a bounded number of model
-turns. It returns the final text and replay-ready history for follow-up
-requests. The versioned instructions live in
+`run_agent` uses the OpenAI Agents SDK runner with limits of eight turns, eight
+model calls, sixteen tool calls, and sixty seconds per run. Callers can lower
+the last three limits with `max_model_calls`, `max_tool_calls`, and
+`run_timeout_seconds`. Exhausting a call limit raises `RunBudgetExceeded`;
+the deadline raises `TimeoutError`. Successful runs return final text and
+replay-ready history for follow-up requests. The versioned instructions live in
 `openai_agent_sdk/prompts/system.md`. SDK tracing is disabled for this local V1.
 The tests use a scripted model and make no real API calls.
 
 ### Test and inspect results
+
+For four versioned evaluation examples, framework choices, deterministic
+graders, and opt-in real-model commands, see [evals/README.md](evals/README.md).
 
 Run the deterministic project checks from this folder:
 
@@ -362,3 +368,49 @@ Records contain only tool name, call ID, duration, outcome, source, and error
 class. They exclude credentials, arguments, job descriptions, resume text,
 result content, and exception messages. SDK export remains independently
 controlled by `JOB_AGENT_SDK_TRACING`, with sensitive payloads disabled.
+
+### V2-b step 7: acceptance and known differences
+
+Offline checks cover discovery compatibility, content decoding, normalization,
+local filters, duplicate removal, fit evidence, save restrictions, safe errors,
+timeouts without retries, tracing, and session cleanup. A shared response fixture
+produces identical normalized jobs through HTTP and MCP. This does not prove
+that the two live providers return the same jobs.
+
+From this project directory, run:
+
+```bash
+uv run pytest
+```
+
+Live acceptance is deliberately opt-in. These commands make provider requests
+that may consume quota, but make no model calls or subscription changes:
+
+```bash
+# One MCP search, with OPENWEBNINJA_API_KEY configured.
+uv run python -m openai_agent_sdk.mcp_acceptance --live
+
+# One MCP search plus one RapidAPI search, with both provider keys configured.
+uv run python -m openai_agent_sdk.mcp_acceptance --live --compare-direct
+```
+
+The command saves counts, field names, timing, outcomes, and error classes to
+ignored `data/mcp-acceptance.json`. It excludes keys, queries, job text, and raw
+errors. Successful MCP reports confirm that the connection context exited.
+Error reports do not claim verified shutdown. Failed checks exit with status 1.
+A comparison is a separate explicit request, not a fallback after MCP failure.
+
+| Difference | Direct JSearch | OpenWeb Ninja MCP |
+|---|---|---|
+| Credentials | RapidAPI `JSEARCH_API_KEY` | `OPENWEBNINJA_API_KEY` |
+| Request path | HTTP `/search-v2` | MCP `jsearch.search_v2`, then HTTP `/jsearch/search-v2` |
+| Response | JSON provider envelope | JSON envelope inside MCP content |
+| Timeout | Eight-second HTTP timeout | Eight-second client wait; upstream cancellation unverified |
+| Extra lifecycle | None | Node.js server process and MCP session |
+| Application behavior | Shared filtering, deduplication, fit and save rules | Same local rules |
+
+Live acceptance remains pending. During manual debugging, an MCP request timed
+out under the eight-second client deadline. Provider access, quota availability,
+live result differences, and cancellation have not been verified. An empty
+result does not prove that two providers use equivalent datasets. Do not declare
+live equivalence from offline fixture parity or schema discovery.

@@ -13,10 +13,12 @@ from agents import (
     Agent,
     Model,
     RunConfig,
+    RunHooks,
     Runner,
     TResponseInputItem,
     function_tool,
 )
+from agents.exceptions import AgentsException
 from agents.tool_context import ToolContext
 from dotenv import load_dotenv
 
@@ -38,6 +40,9 @@ from .tools import search_jobs as search_job_records
 from .tools.search_jobs import format_live_results, provider_request
 
 MAX_TURNS = 8
+MAX_MODEL_CALLS = 8
+MAX_TOOL_CALLS = 16
+RUN_TIMEOUT_SECONDS = 60
 _SAVE_VERB = r"(?:save|store|bookmark)"
 _SAVE_REQUEST = re.compile(
     rf"(?:^|\b(?:and|then|also)\s+)(?:please\s+)?{_SAVE_VERB}\b"
@@ -70,6 +75,28 @@ class AgentTurn:
     text: str
     history: list[TResponseInputItem]
     tool_traces: tuple[ToolTrace, ...] = ()
+
+
+class RunBudgetExceeded(AgentsException):
+    """A run tried to start a call beyond its budget."""
+
+
+class BudgetHooks(RunHooks[JobAgentContext]):
+    def __init__(self, max_model_calls: int, max_tool_calls: int):
+        self.max_model_calls = max_model_calls
+        self.max_tool_calls = max_tool_calls
+        self.model_calls = 0
+        self.tool_calls = 0
+
+    async def on_llm_start(self, context, agent, system_prompt, input_items):
+        if self.model_calls >= self.max_model_calls:
+            raise RunBudgetExceeded("Model call budget exhausted.")
+        self.model_calls += 1
+
+    async def on_tool_start(self, context, agent, tool):
+        if self.tool_calls >= self.max_tool_calls:
+            raise RunBudgetExceeded("Tool call budget exhausted.")
+        self.tool_calls += 1
 
 
 def explicit_save_requested(message: str) -> bool:
@@ -217,11 +244,16 @@ def run_agent(
     *,
     agent: Agent[JobAgentContext] | None = None,
     max_turns: int = MAX_TURNS,
+    max_model_calls: int = MAX_MODEL_CALLS,
+    max_tool_calls: int = MAX_TOOL_CALLS,
+    run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
 ) -> AgentTurn:
     """Synchronous entry point for callers that do not own an event loop."""
     return asyncio.run(run_agent_async(
-        user_message, history, agent=agent, max_turns=max_turns, trace_sink=trace_sink
+        user_message, history, agent=agent, max_turns=max_turns,
+        max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
+        run_timeout_seconds=run_timeout_seconds, trace_sink=trace_sink,
     ))
 
 
@@ -231,6 +263,9 @@ async def run_agent_async(
     *,
     agent: Agent[JobAgentContext] | None = None,
     max_turns: int = MAX_TURNS,
+    max_model_calls: int = MAX_MODEL_CALLS,
+    max_tool_calls: int = MAX_TOOL_CALLS,
+    run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
 ) -> AgentTurn:
     """Run a bounded turn on the caller’s event loop for async tools."""
@@ -238,6 +273,8 @@ async def run_agent_async(
         raise ValueError("User message cannot be empty.")
     if max_turns < 1:
         raise ValueError("max_turns must be at least 1.")
+    if max_model_calls < 1 or max_tool_calls < 1 or run_timeout_seconds <= 0:
+        raise ValueError("Run budgets must be positive.")
 
     criteria = parse_criteria(user_message)
     turn_input: list[TResponseInputItem] = [
@@ -250,13 +287,18 @@ async def run_agent_async(
     )
     sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
     try:
-        result = await Runner.run(
-            selected_agent, turn_input, context=context, max_turns=max_turns,
-            run_config=RunConfig(
-                tracing_disabled=not sdk_tracing,
-                trace_include_sensitive_data=False,
-                workflow_name="Job Search Agent",
+        # shortcut: JSearch ignores mid-call cancellation; use async I/O for hard stops.
+        result = await asyncio.wait_for(
+            Runner.run(
+                selected_agent, turn_input, context=context, max_turns=max_turns,
+                hooks=BudgetHooks(max_model_calls, max_tool_calls),
+                run_config=RunConfig(
+                    tracing_disabled=not sdk_tracing,
+                    trace_include_sensitive_data=False,
+                    workflow_name="Job Search Agent",
+                ),
             ),
+            timeout=run_timeout_seconds,
         )
     finally:
         if trace_sink is not None:

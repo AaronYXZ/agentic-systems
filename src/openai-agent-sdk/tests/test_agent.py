@@ -1,5 +1,6 @@
 """Exercise the real SDK loop with a scripted model and no API calls."""
 
+import asyncio
 import json
 
 import pytest
@@ -12,6 +13,7 @@ from openai.types.responses import (
     ResponseOutputText,
 )
 from openai_agent_sdk.agent import (
+    RunBudgetExceeded,
     build_agent,
     explicit_save_requested,
     run_agent,
@@ -138,6 +140,59 @@ class ScriptedModel(Model):
     async def stream_response(self, *args, **kwargs):
         raise NotImplementedError
         yield  # pragma: no cover
+
+
+def test_model_call_budget_stops_before_next_model_request():
+    model = ScriptedModel([
+        [_call("read_resume", {}, "resume")], [_answer("Done")]
+    ])
+    with pytest.raises(RunBudgetExceeded, match="Model call budget exhausted"):
+        run_agent("Read my resume", agent=build_agent(model=model), max_model_calls=1)
+    assert len(model.inputs) == 1
+
+
+def test_tool_call_budget_stops_before_next_tool(tmp_path, monkeypatch):
+    model = ScriptedModel([[
+        _call("read_resume", {}, "first"),
+        _call("save_results", {"content": "job-002"}, "second"),
+    ]])
+    results = tmp_path / "results.md"
+    def unexpected_save(*args, **kwargs):
+        pytest.fail("A tool ran after the call budget was exhausted")
+
+    monkeypatch.setattr("openai_agent_sdk.agent.save_results_file", unexpected_save)
+    with pytest.raises(RunBudgetExceeded, match="Tool call budget exhausted"):
+        run_agent("Save these jobs", agent=build_agent(
+            model=model, results_path=results
+        ), max_tool_calls=1)
+    assert not results.exists()
+
+
+def test_run_deadline_cancels_slow_model():
+    cancelled = False
+    records = []
+
+    class SlowModel(ScriptedModel):
+        async def get_response(self, *args, **kwargs):
+            nonlocal cancelled
+            if not self.inputs:
+                return await super().get_response(*args, **kwargs)
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            return await super().get_response(*args, **kwargs)
+
+    model = SlowModel([
+        [_call("read_resume", {}, "before-timeout")], [_answer("Too late")]
+    ])
+    with pytest.raises(TimeoutError):
+        run_agent("Hello", agent=build_agent(model=model),
+                  run_timeout_seconds=0.01, trace_sink=records.append)
+    assert cancelled
+    assert len(model.inputs) == 1
+    assert [record.call_id for record in records] == ["before-timeout"]
 
 
 def test_agent_registers_only_three_tools_and_loads_versioned_prompt():

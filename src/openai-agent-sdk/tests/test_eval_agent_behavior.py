@@ -10,7 +10,12 @@ import pytest
 from agents import OpenAIResponsesModel
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from openai_agent_sdk.agent import AgentTurn, build_agent, run_agent_async
+from openai_agent_sdk.agent import (
+    AgentTurn,
+    RunBudgetExceeded,
+    build_agent,
+    run_agent_async,
+)
 from openai_agent_sdk.contracts import PROJECT_ROOT
 from openai_agent_sdk.filtering import filter_jobs, parse_criteria
 from openai_agent_sdk.jsearch import normalize_job
@@ -25,13 +30,15 @@ SEARCH_ARGUMENT_CASES = json.loads(
 JOB_ID = "jsearch:remote-001"
 
 
-def run_case(case, tmp_path, model=None):
+def run_case(case, tmp_path, model=None, **run_options):
     stamp = "2026-10-10T00:00:00Z"
     provider_calls = []
 
     class FixedProvider:
         async def search(self, query, **options):
             provider_calls.append({"query": query, **options})
+            if delay := case.get("provider_delay_seconds", 0):
+                await asyncio.sleep(delay)
             return {
                 "source": "jsearch", "retrieved_at": stamp,
                 "jobs": [normalize_job(job, stamp) for job in case["jobs"]],
@@ -49,12 +56,16 @@ def run_case(case, tmp_path, model=None):
                     model=live_model, provider="mcp", mcp_adapter=FixedProvider(),
                     resume_path=resume, results_path=results,
                 )
-                return await run_agent_async(case["request"], agent=agent), model_name
+                return await run_agent_async(
+                    case["request"], agent=agent, **run_options
+                ), model_name
         agent = build_agent(
             model=model, provider="mcp", mcp_adapter=FixedProvider(),
             resume_path=resume, results_path=results,
         )
-        return await run_agent_async(case["request"], agent=agent), agent.model
+        return await run_agent_async(
+            case["request"], agent=agent, **run_options
+        ), agent.model
 
     turn, model_name = asyncio.run(execute())
     return turn, results, model_name, provider_calls
@@ -358,3 +369,64 @@ def test_answer_grounding_with_real_model(case_index, tmp_path, monkeypatch):
         assert job_id not in turn.text
     assert not results.exists()
     print(f"Case {case['id']} / {model_name}: passed. Answer: {turn.text}")
+
+
+@pytest.mark.integration
+def test_model_call_budget_with_real_model(tmp_path, monkeypatch):
+    """Model: configured OpenAI model. Search once, then stop before another model call.
+
+    `runtime-budget.json` sets a one-call model budget and a fixed job provider.
+    Tool traces prove the model requested search before the budget stopped the run.
+    """
+    if os.getenv("RUN_LIVE_AGENT_EVAL") != "1":
+        pytest.skip("Set RUN_LIVE_AGENT_EVAL=1 to allow paid model calls.")
+    load_dotenv(PROJECT_ROOT / ".env")
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        pytest.fail("OPENAI_API_KEY is required for the live model eval.")
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
+    case = json.loads((CASE_DIR / "runtime-budget.json").read_text(encoding="utf-8"))
+    records = []
+    with pytest.raises(RunBudgetExceeded, match="Model call budget exhausted"):
+        run_case(
+            case, tmp_path, max_model_calls=case["max_model_calls"],
+            trace_sink=records.append,
+        )
+    assert case["expected_tool"] in [record.tool_name for record in records]
+    assert not (tmp_path / "results.md").exists()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "case_index", [0, 1], ids=["tool-calls", "run-timeout"]
+)
+def test_other_runtime_budgets_with_real_model(case_index, tmp_path, monkeypatch):
+    """Model: configured OpenAI model. Check a second tool call or slow search.
+
+    The fixed provider delays only the timeout case. Both cases are opt-in.
+    """
+    if os.getenv("RUN_LIVE_AGENT_EVAL") != "1":
+        pytest.skip("Set RUN_LIVE_AGENT_EVAL=1 to allow paid model calls.")
+    load_dotenv(PROJECT_ROOT / ".env")
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        pytest.fail("OPENAI_API_KEY is required for the live model eval.")
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
+    data = json.loads((CASE_DIR / "runtime-budget.json").read_text(encoding="utf-8"))
+    case = data["additional_cases"][case_index]
+    records = []
+    options = {
+        name: case[name] for name in ("max_tool_calls", "run_timeout_seconds")
+        if name in case
+    }
+    if "max_tool_calls" in case:
+        with pytest.raises(RunBudgetExceeded, match="Tool call budget exhausted"):
+            run_case(case, tmp_path, trace_sink=records.append, **options)
+        assert len(records) <= case["max_tool_calls"]
+    else:
+        with pytest.raises(TimeoutError):
+            run_case(case, tmp_path, trace_sink=records.append, **options)
+        assert any(
+            record.tool_name == case["expected_tool"]
+            and record.error_class == "CancelledError"
+            for record in records
+        )
+    assert not (tmp_path / "results.md").exists()

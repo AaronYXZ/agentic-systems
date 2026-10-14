@@ -1,0 +1,56 @@
+{
+  "id": "model-call-budget-after-search",
+  "request": "Search for remote Python jobs in the US with search_jobs. Include the job ID. Do not save anything.",
+  "resume": "Built Python services.",
+  "jobs": [
+    {
+      "job_id": "budget-001",
+      "job_title": "Python Engineer",
+      "employer_name": "Example Remote Company",
+      "job_description": "Required: Python experience.",
+      "job_apply_link": "https://example.com/jobs/budget-001",
+      "job_is_remote": true,
+      "job_country": "US"
+    }
+  ],
+  "max_model_calls": 1,
+  "expected_tool": "search_jobs",
+  "additional_cases": [
+    {
+      "id": "tool-call-budget-after-first-tool",
+      "request": "Read my resume, then search for remote Python jobs in the US. Use both tools and include the job ID. Do not save anything.",
+      "resume": "Built Python services.",
+      "jobs": [
+        {
+          "job_id": "budget-002",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Remote Company",
+          "job_description": "Required: Python experience.",
+          "job_apply_link": "https://example.com/jobs/budget-002",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "max_tool_calls": 1
+    },
+    {
+      "id": "run-timeout-during-search",
+      "request": "Search for remote Python jobs in the US with search_jobs. Include the job ID. Do not save anything.",
+      "resume": "Built Python services.",
+      "jobs": [
+        {
+          "job_id": "budget-003",
+          "job_title": "Python Engineer",
+          "employer_name": "Example Remote Company",
+          "job_description": "Required: Python experience.",
+          "job_apply_link": "https://example.com/jobs/budget-003",
+          "job_is_remote": true,
+          "job_country": "US"
+        }
+      ],
+      "run_timeout_seconds": 20,
+      "provider_delay_seconds": 60,
+      "expected_tool": "search_jobs"
+    }
+  ]
+}

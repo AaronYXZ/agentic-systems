@@ -151,12 +151,32 @@ Model judges cannot establish authorization or tenant isolation.
 ## evals
 
 Implement these steps in order. Keep each new case in `evals/` and each test
-in `tests/test_eval_agent_behavior.py`. Step 1 is implemented there. The code
-below sketches later steps; it need not match the final test file line for line.
+in `tests/test_eval_agent_behavior.py`. Steps 1 and 2 are implemented; Step 3
+has offline coverage and four unrun live cases. The code below sketches later
+steps; it need not match the final test file line for line.
 Run commands from `src/openai-agent-sdk/`.
 Use fictional jobs and resumes. A fixed provider keeps job data constant while
 the real model chooses tools and writes the answer. Use pytest and the current
 OpenAI Agents SDK runner. Add no evaluation service for these checks.
+
+### Progress as of 2026-10-14
+
+| Step | Progress | Evidence still needed |
+|---|---|---|
+| 1. Tool choice and order | Offline grader and scripted runner pass; user reports a live pass | Repeat live runs before claiming reliability |
+| 2. Search arguments | Six offline cases and six live cases passed with `gpt-5.6-terra` | Repeat live runs before comparing models or prompts |
+| 3. Answer grounding | Four cases and four offline grader examples pass | Run the four opt-in live cases when authorized |
+| 4–8. Remaining evals | Planned | Implement and verify each step in order |
+
+**Next to-dos:**
+
+1. Implement Step 4's uncertainty grader using `partial-fit.json`: Python is
+   matched; SQL remains unverified.
+2. Add offline passing and failing answers, including a false claim that the
+   candidate lacks SQL.
+3. Keep any Step 4 real-model test opt-in and report offline and live results
+   separately.
+4. Continue with Step 5's two-job completion case after Step 4 passes offline.
 
 First, add this small shared setup to the new test file. It uses the same
 `build_agent`, `run_agent`, and `normalize_job` functions as the existing evals.
@@ -307,8 +327,8 @@ offline grader passed, and all six opt-in real-model cases passed with
 `gpt-5.6-terra` on 2026-10-13.
 
 **Focus:** The model must send useful query terms. The application must send
-the user's hard filters to the provider. The current evals check provider
-options, but do not check the model's query text.
+the user's hard filters to the provider. The current evals check both the
+model's query text and the provider options.
 
 **Sample data:** Add `evals/search-arguments.json`. Request remote Python jobs
 in the US. Include one Python job and one Java job. The expected query term is
@@ -346,7 +366,9 @@ role filter to a bad model query before it reaches the provider.
 ### Step 3. Answer grounding
 
 **Status:** The case, exact-excerpt grader, and four offline grader examples
-are implemented. The real-model case is available but has not been run.
+are implemented. `answer-grounding.json` has four cases, including two-skill,
+two-job, and excluded-job variants. The four real-model cases are available
+but have not been run.
 
 **Focus:** A fit claim must cite text from the returned job and the resume.
 Use exact source excerpts for the first grader. Review other prose claims by

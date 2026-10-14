@@ -11,3 +11,4 @@ build/
 *.egg-info/
 data/resume.md
 data/results.md
+data/mcp-acceptance.json
