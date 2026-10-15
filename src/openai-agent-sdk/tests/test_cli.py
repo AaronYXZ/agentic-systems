@@ -188,5 +188,140 @@ def test_main_selects_mcp_from_configuration(monkeypatch):
     monkeypatch.setattr(
         "openai_agent_sdk.cli.run_cli", lambda: pytest.fail("No fallback")
     )
-    main()
+    main([])
     assert calls == ["test-provider-key"]
+
+
+@pytest.mark.parametrize("arguments", [["--session", " "], ["--session-db", "x.db"]])
+def test_session_arguments_reject_invalid_selection(arguments):
+    from openai_agent_sdk.cli import main
+
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+    assert error.value.code == 2
+
+
+def test_persistent_cli_continues_after_process_restart(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from textwrap import dedent
+
+    # Exercise real SQLite and SDK execution in separate CLI processes, without APIs.
+    script = dedent('''
+        import os
+        import sys
+        from pathlib import Path
+        from openai_agent_sdk import cli
+        from openai_agent_sdk.agent import build_agent, run_agent
+        from test_agent import ScriptedModel, _answer, _call
+
+        phase, database, results, session_id = sys.argv[1:]
+        os.environ["JOB_AGENT_SDK_TRACING"] = "false"
+        os.environ["JOB_SEARCH_PROVIDER"] = "mock"
+        cli.load_dotenv = lambda path: None
+        if phase == "resume":
+            steps = [[_call("save_results", {"content": "job-001: Example"}, "denied")],
+                     [_answer("Not saved")]]
+            message = "Find jobs. Do not save"
+        else:
+            steps, message = [[_answer("Ready")]], "Save job-001"
+        model = ScriptedModel(steps)
+        agent = build_agent(model=model, provider="mock",
+                            results_path=Path(results))
+        def turn(message, history, *, session):
+            assert history is None
+            result = run_agent(message, session=session, agent=agent)
+            assert len(model.inputs[0]) == (3 if phase == "resume" else 1)
+            if phase == "resume":
+                assert "Saving requires an explicit request" in repr(result.history)
+            return result
+        cli._run_live_turn = turn
+        original = cli.run_cli
+        inputs = iter([message, "quit"])
+        cli.run_cli = lambda **options: original(
+            input_fn=lambda prompt: next(inputs), **options)
+        cli.main(["--session", session_id, "--session-db", database])
+    ''')
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parent)}
+    for phase, session_id in [("first", "A"), ("resume", "A"), ("first", "B")]:
+        result = subprocess.run(
+            [sys.executable, "-c", script, phase, str(tmp_path / "history.db"),
+             str(tmp_path / "results.md"), session_id],
+            env=env, capture_output=True, text=True, timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"Conversation: {session_id}" in result.stdout
+        assert "Goodbye." in result.stdout
+    assert not (tmp_path / "results.md").exists()
+
+
+def test_database_open_failure_does_not_start_ephemeral_cli(
+    tmp_path, monkeypatch, capsys
+):
+    from openai_agent_sdk.cli import main
+
+    monkeypatch.setattr("openai_agent_sdk.cli.run_cli",
+                        lambda **options: pytest.fail("No ephemeral fallback"))
+    main(["--session", "A", "--session-db", str(tmp_path / "missing" / "db")])
+    assert "database could not be opened" in capsys.readouterr().err
+
+
+def test_recovery_error_stops_cli_before_next_request():
+    from openai_agent_sdk.agent import SessionRecoveryError
+
+    calls, outputs = [], []
+    def broken(message, history):
+        calls.append(message)
+        raise SessionRecoveryError("Synthetic failure")
+    run_cli(agent_fn=broken, persistent=True,
+            input_fn=_input_from("Fail", "Must not execute", "quit"),
+            output_fn=outputs.append)
+    assert calls == ["Fail"]
+    assert "Stop and check the database" in outputs[0]
+
+
+@pytest.mark.parametrize("provider", ["mock", "mcp"])
+@pytest.mark.parametrize("ending", ["quit", EOFError, KeyboardInterrupt])
+def test_main_closes_persistent_session_and_mcp_connection(
+    tmp_path, monkeypatch, provider, ending
+):
+    from contextlib import asynccontextmanager
+
+    from agents import SQLiteSession
+    from openai_agent_sdk import cli
+
+    sessions, events = [], []
+    def create_session(*args):
+        session = SQLiteSession(*args)
+        sessions.append(session)
+        return session
+    @asynccontextmanager
+    async def connection(key):
+        events.append("open")
+        try:
+            yield object()
+        finally:
+            events.append("close")
+    def read_input(prompt):
+        if isinstance(ending, type):
+            raise ending()
+        return ending
+    monkeypatch.setattr(cli, "SQLiteSession", create_session)
+    monkeypatch.setattr(cli, "load_dotenv", lambda path: None)
+    monkeypatch.setattr(cli, "open_search_session", connection)
+    # Input callbacks are bound at definition time, so supply them explicitly.
+    original_cli, original_mcp = cli.run_cli, cli.run_mcp_cli
+    monkeypatch.setattr(
+        cli, "run_cli", lambda **kw: original_cli(input_fn=read_input, **kw)
+    )
+    async def mcp_cli(**kw):
+        await original_mcp(input_fn=read_input, **kw)
+    monkeypatch.setattr(cli, "run_mcp_cli", mcp_cli)
+    monkeypatch.setenv("JOB_SEARCH_PROVIDER", provider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setenv("OPENWEBNINJA_API_KEY", "test")
+    cli.main(["--session", "A", "--session-db", str(tmp_path / "history.db")])
+    assert sessions[0]._closed
+    assert events == (["open", "close"] if provider == "mcp" else [])

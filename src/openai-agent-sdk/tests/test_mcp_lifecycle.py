@@ -69,9 +69,10 @@ def test_session_closes_on_exit_failure_and_cancellation(
     ]
 
 
+@pytest.mark.parametrize("persistent", [False, True])
 @pytest.mark.parametrize("ending", ["quit", EOFError, KeyboardInterrupt])
 def test_cli_reuses_session_and_preserves_history_after_failed_turn(
-    monkeypatch, ending
+    monkeypatch, ending, persistent
 ):
     events = []
     adapter = object()
@@ -104,14 +105,15 @@ def test_cli_reuses_session_and_preserves_history_after_failed_turn(
     outputs = []
     asyncio.run(
         run_mcp_cli(
-            api_key="test", agent_fn=turn, input_fn=read_input, output_fn=outputs.append
+            api_key="test", agent_fn=turn, input_fn=read_input,
+            output_fn=outputs.append, persistent=persistent
         )
     )
     assert events == ["opened", "closed"]
     assert calls == [
         ("First", None, adapter),
-        ("Fail", history, adapter),
-        ("Retry", history, adapter),
+        ("Fail", None if persistent else history, adapter),
+        ("Retry", None if persistent else history, adapter),
     ]
     assert outputs[-1] == "Goodbye."
     assert all("secret" not in output for output in outputs)

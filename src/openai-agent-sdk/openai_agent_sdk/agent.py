@@ -15,6 +15,7 @@ from agents import (
     RunConfig,
     RunHooks,
     Runner,
+    Session,
     TResponseInputItem,
     function_tool,
 )
@@ -75,6 +76,10 @@ class AgentTurn:
     text: str
     history: list[TResponseInputItem]
     tool_traces: tuple[ToolTrace, ...] = ()
+
+
+class SessionRecoveryError(RuntimeError):
+    """Session history could not be restored; callers must stop this conversation."""
 
 
 class RunBudgetExceeded(AgentsException):
@@ -243,6 +248,7 @@ def run_agent(
     history: list[TResponseInputItem] | None = None,
     *,
     agent: Agent[JobAgentContext] | None = None,
+    session: Session | None = None,
     max_turns: int = MAX_TURNS,
     max_model_calls: int = MAX_MODEL_CALLS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -251,7 +257,7 @@ def run_agent(
 ) -> AgentTurn:
     """Synchronous entry point for callers that do not own an event loop."""
     return asyncio.run(run_agent_async(
-        user_message, history, agent=agent, max_turns=max_turns,
+        user_message, history, agent=agent, session=session, max_turns=max_turns,
         max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
         run_timeout_seconds=run_timeout_seconds, trace_sink=trace_sink,
     ))
@@ -262,6 +268,7 @@ async def run_agent_async(
     history: list[TResponseInputItem] | None = None,
     *,
     agent: Agent[JobAgentContext] | None = None,
+    session: Session | None = None,
     max_turns: int = MAX_TURNS,
     max_model_calls: int = MAX_MODEL_CALLS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -276,6 +283,9 @@ async def run_agent_async(
     if max_model_calls < 1 or max_tool_calls < 1 or run_timeout_seconds <= 0:
         raise ValueError("Run budgets must be positive.")
 
+    if session is not None and history:
+        raise ValueError("Use session or explicit history, not both.")
+
     criteria = parse_criteria(user_message)
     turn_input: list[TResponseInputItem] = [
         *(history or []),
@@ -285,12 +295,14 @@ async def run_agent_async(
     context = JobAgentContext(
         save_allowed=explicit_save_requested(user_message), criteria=criteria
     )
+    prior_history = await session.get_items() if session is not None else []
     sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
     try:
         # shortcut: JSearch ignores mid-call cancellation; use async I/O for hard stops.
         result = await asyncio.wait_for(
             Runner.run(
-                selected_agent, turn_input, context=context, max_turns=max_turns,
+                selected_agent, user_message if session is not None else turn_input,
+                session=session, context=context, max_turns=max_turns,
                 hooks=BudgetHooks(max_model_calls, max_tool_calls),
                 run_config=RunConfig(
                     tracing_disabled=not sdk_tracing,
@@ -300,6 +312,23 @@ async def run_agent_async(
             ),
             timeout=run_timeout_seconds,
         )
+    except BaseException:
+        if session is not None:
+            # shortcut: one writer per session; crash-safe recovery needs transactions.
+            try:
+                current = await session.get_items()
+                if current[:len(prior_history)] != prior_history:
+                    raise RuntimeError("Stored history changed during the turn.")
+                for _ in range(len(current) - len(prior_history)):
+                    await session.pop_item()
+                if await session.get_items() != prior_history:
+                    raise RuntimeError("Stored history could not be restored.")
+            except Exception as error:
+                raise SessionRecoveryError(
+                    "Conversation recovery failed. Stop using this session "
+                    "until its history is repaired."
+                ) from error
+        raise
     finally:
         if trace_sink is not None:
             for record in context.tool_traces:

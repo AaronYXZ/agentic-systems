@@ -12,3 +12,4 @@ build/
 data/resume.md
 data/results.md
 data/mcp-acceptance.json
+data/conversations.sqlite3*

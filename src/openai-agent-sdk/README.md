@@ -150,6 +150,51 @@ does nothing. Type `exit` or `quit`, send end-of-file, or press Ctrl-C to leave.
 An error on one turn prints a recovery message and leaves the CLI open. Failed
 turns do not replace the last successful conversation history.
 
+### Persistent conversations
+
+Without session options, the CLI keeps history only until exit. To create or
+resume a conversation, run from this project folder:
+
+```bash
+uv run job-agent --session learning
+uv run job-agent --session another-conversation
+# Optional database location. Its parent directory must already exist.
+uv run job-agent --session learning --session-db /tmp/job-conversations.sqlite3
+```
+
+Reusing the same ID and database restores conversation history. The default
+database is `data/conversations.sqlite3`, relative to this project, and is
+ignored by Git along with its SQLite side files. Custom databases must also
+stay outside version control. Startup prints the selected ID and database path.
+Both mock/JSearch and MCP CLI modes support these options. MCP still owns one
+provider connection for the CLI lifetime. Database open failures stop startup;
+storage or recovery failures stop the conversation without an ephemeral fallback.
+
+Messages and tool results can contain resume and job text. Metadata-only
+tracing does not remove that content from the database. Use fictional data for
+learning. Keep one active CLI per conversation. This local ID is not user
+authentication or tenant isolation.
+
+Save permission, search criteria, searched-job evidence, and budgets start
+fresh each turn. Continuing a conversation does not resume an interrupted
+action. Handled failures restore prior messages, but do not undo tool effects
+or provide recovery after a process crash.
+
+To erase one conversation's messages, stop its CLI first. From this folder,
+run the following with the intended ID and database path:
+
+``` python
+import asyncio
+from contextlib import closing
+from agents import SQLiteSession
+
+with closing(SQLiteSession("learning", "data/conversations.sqlite3")) as session:
+    asyncio.run(session.clear_session())
+```
+
+Reset removes that conversation's history without removing other conversations,
+saved recommendations, or the resume. It is not secure erasure of database backups.
+
 ### Check the installation
 
 ```bash

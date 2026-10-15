@@ -84,6 +84,150 @@ existing regression checks and add only the distinct behavior checks needed.
 | 18. Ownership handoffs | After lesson 17's gate, compare handoffs with agents-as-tools | Specialist takes final-answer ownership; context is filtered across transfer | Clear reply owner, preserved tenant/policy limits, bounded total workflow budget |
 | 19. Release and operations | Regression gates, dependency/model/prompt versions, canary release, rollback, redacted metrics | Inject provider outage and bad prompt update | Failed safety gate blocks release; operator can explain, cancel, and roll back a run |
 
+### Lesson 7 plan. Persistent conversations
+
+Status: Steps 7.1 through 7.3 verified offline, 2026-10-14.
+This is build-sequence Lesson 7, distinct
+from eval Step 7 (provider failure). Stay on the OpenAI Agents SDK.
+
+Learning outcome: close the CLI, reopen the same conversation, and continue
+without manually replaying its history. Explain why remembered dialogue does
+not restore permissions, current search evidence, or an interrupted execution.
+
+Current baseline: `_run_cli_loop` retains `AgentTurn.history` in memory;
+`run_agent_async` prepends it to each new message. History disappears at exit.
+Every invocation already creates fresh `JobAgentContext` and `BudgetHooks`.
+Preserve that per-turn boundary.
+
+The installed SDK exposes `SQLiteSession(session_id, db_path=...)`, async
+history operations, and synchronous `close()`. Its default database is in
+memory, so persistence requires an explicit file path. `Runner.run` accepts
+`session=`. Check these signatures again before implementation.
+Official context: [Running agents](https://developers.openai.com/api/docs/guides/agents/running-agents).
+Local source inspected: `agents/memory/sqlite_session.py` and `agents/run.py`
+in the isolated project's virtual environment. Installed source governs the
+implementation when newer documentation differs.
+
+#### 7.1. Establish the session contract with offline tests
+
+- Add `tests/test_sessions.py`, using temporary SQLite files and the existing
+  scripted model. First demonstrate two successful turns, then close and
+  reopen the database with the same ID. Assert exact stored items and the next
+  model input, including correlated tool calls/results, without duplicated history.
+- Use two IDs in the same database. Assert that each model sees only its own
+  conversation. This is local conversation separation; identity enforcement
+  belongs to Lesson 9.
+- Force model failure, budget exhaustion, cancellation, and storage failure.
+  Inspect the actual SDK persistence behavior before choosing recovery code.
+  Target the existing CLI contract: a failed turn must not advance committed
+  conversation history. If the SDK saves partial items, add only the minimal
+  tested recovery needed under the single-writer assumption. Do not claim
+  crash-safe turn transactions or exactly-once external actions.
+
+Exit evidence: tests characterize the installed SDK and define successful-turn
+and failed-turn history behavior before application integration.
+
+Observed: six offline cases in `tests/test_sessions.py` pass. Successful history
+and correlated tool results survive reopening without duplication; conversation
+IDs isolate model inputs. Model failure, budget exhaustion, and cancellation
+retain the user message and completed tool exchange. An injected pre-write
+storage error propagates without changing prior history. These observations
+established the recovery requirement implemented in Step 7.2. They do not test
+disk failure mid-transaction or process crashes.
+
+#### 7.2. Give persistent history one owner
+
+- Add an optional `session` parameter to `run_agent` and `run_agent_async`.
+  With a session, send only the current user message to `Runner.run` and pass
+  `session=session`. Reject a nonempty explicit `history` combined with a
+  session before any model or tool call. Keep manual replay for callers that
+  do not request persistence.
+- Keep `AgentTurn.history` compatible for existing callers, but never feed
+  that returned history back into a session-backed turn. Do not add another
+  conversation store or custom message schema.
+- Rebuild save permission, parsed criteria, searched jobs, fit authorization,
+  call counters, and local trace records on every invocation. A previous saved
+  request cannot authorize a later save. A remembered job must be searched
+  again before a current-turn fit assessment.
+- Retain execution budgets, trace delivery on failure, and provider behavior.
+  Keep live save restrictions in the existing tool path.
+
+Exit evidence: real SDK loop tests show one copy of each message, fresh policy
+context after restart, and unchanged behavior for callers without a session.
+
+Implemented: both runner entry points accept `session=`. Session mode sends
+only the current message; combining it with nonempty explicit history raises
+`ValueError`. The caller owns opening and closing the session. On handled
+failure or cancellation, the runner removes newly appended history items and
+verifies restoration, retaining prior messages and reporting recovery failures.
+This requires one writer and full, untrimmed session history. It does not undo
+tool effects or provide atomic recovery after a process crash. Live-model
+continuation evals remain pending.
+
+Offline evidence in `tests/test_sessions.py`: reopening supplies history once;
+prior save permission and search evidence cannot authorize new actions; criteria
+and call budgets reset; model, budget, deadline, cancellation, and injected
+storage failures preserve pre-turn history; completed tool traces are delivered
+on failure, including when history recovery itself fails.
+
+#### 7.3. Add explicit CLI selection and verify restart
+
+Implemented and verified offline: `--session ID` selects SQLite history and
+`--session-db PATH` overrides its location. Persistent mode disables manual
+history replay. Startup shows the ID and path. SQLite connections close on
+quit, EOF, and Ctrl-C in both normal and MCP modes. MCP retains one provider
+connection per CLI lifetime. Storage and typed recovery errors stop the CLI.
+README instructions cover local content, one-writer limits, and session reset;
+the default database and SQLite side files are ignored.
+
+Exit evidence: a separate-process CLI test creates A, reopens A, and creates B.
+It verifies restored model input, no duplicate history, conversation isolation,
+and denied saving without current permission. Resetting A leaves B intact.
+MCP loop tests verify that persistent turns receive no manually replayed history.
+Repository Ruff and 15 root tests pass; SDK tests report 192 passed and 18 live
+tests skipped. No live calls were made. The audit's conditional-save permission
+and limited-history-session issues remain open.
+
+Implementation checklist:
+
+- Add `job-agent --session ID` with optional `--session-db PATH`, defaulting to
+  `data/conversations.sqlite3` when persistence is selected. Without `--session`,
+  preserve today's ephemeral CLI. Reject a blank ID and a database override
+  without a session ID. Print the selected ID and path once at startup.
+- Open one session for the CLI lifetime and close it in `finally`, including
+  EOF, Ctrl-C, and errors. Integrate both the normal and MCP paths; retain one
+  MCP connection per CLI lifetime. The shared loop must avoid manual replay
+  in persistent mode while retaining existing injected-callback tests.
+- Keep one active writer per conversation as a documented lesson constraint.
+  Defer concurrent workers, session browsing, history compaction, preferences,
+  domain tables, and durable run recovery to their respective lessons.
+- Ignore the default SQLite database and its journal/WAL/SHM files. Document
+  that stored messages and tool results can contain resume and job text even
+  when metadata traces omit them. Use fictional data in the demonstration.
+  Document an explicit per-session reset using `clear_session()` with the CLI
+  stopped; test that it leaves the second conversation intact.
+- Update `README.md` with new/resumed conversation commands, local storage
+  location, reset behavior, and the distinction between chat continuation and
+  resuming an interrupted action. Report database errors clearly; do not
+  silently switch to ephemeral storage after a persistence failure.
+
+Exit evidence:
+
+1. A scripted two-process test writes conversation A, exits, and verifies its
+   next model input after reopening. Each stored message appears once.
+2. Conversation B has no A messages; clearing A leaves B unchanged.
+3. A prior affirmative save request cannot enable a forced save on a resumed
+   turn without current permission. Verify no file write occurs.
+4. Prior criteria and searched jobs do not become current-turn authorization;
+   counters reset and failed turns meet the documented history contract.
+5. Existing CLI exit/recovery, MCP cleanup, and tracing tests still pass.
+
+Run isolated SDK tests with `RUN_LIVE_AGENT_EVAL=0 uv run pytest`, then root
+`uv run ruff check .` and `uv run pytest`. Any real-model restart demonstration
+is separately enabled and budgeted; it is not required to prove persistence.
+Deliver one focused lesson commit after these checks, with observed exit
+evidence recorded here. Steps 7.1 through 7.3 are implemented so far.
+
 ### How to connect the components
 
 Trusted identity enters before data access. The application builds a run context
