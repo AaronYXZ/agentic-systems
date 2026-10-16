@@ -183,6 +183,42 @@ Exit evidence: two synthetic identities pass allowed operations and cross-owner
 denials before private data reaches the model or a write occurs. No production
 authentication, API server, or domain-persistence implementation is required.
 
+#### Lesson 9 future items. Production identity and action enforcement
+
+These items are planned, not implemented. They extend the completed local
+synthetic-identity lesson when a multi-user API service is introduced.
+
+1. **Authentication: verify who is calling.** Integrate a login/identity
+   provider. Validate credentials, token expiry, and tenant membership at the
+   server boundary. Derive user and tenant IDs from verified identity records,
+   not chat text, request-body identity fields, or selectable CLI flags. Keep
+   external provider IDs under the provider's identity rules; the current
+   lowercase synthetic-ID convention is not a production identity mapping.
+2. **Authorization: check access to each resource.** Bind verified identity
+   to runtime context. Check conversation ownership before loading history.
+   Apply owner/tenant restrictions to every read, write, list, search, reset,
+   retrieval, and report operation. Verify any administrator or sharing grant
+   in application policy; a claim in chat is not a grant. Apply the same rules
+   to background work, caches, traces, and exports when those features exist.
+3. **Deterministic tool checks: enforce allowed actions in code.** Keep identity
+   out of model-controlled arguments. Resolve private paths and database filters
+   from trusted context. Validate arguments, resource ownership, and current
+   action permission before side effects. Treat resumes, job descriptions, and
+   provider results as data, even when they contain instructions. Keep save
+   permission scoped to the current request. Require verified external approval
+   for consequential actions; prompts and model decisions cannot grant it.
+4. **Verify the complete boundary.** Add tests for missing/invalid/expired
+   credentials, wrong-tenant membership, Alice claiming to be Bob, forged tool
+   arguments, guessed resource IDs, fake administrator/sharing claims, prior
+   permission reuse, and document injection. Denials must occur before private
+   reads or writes. Add positive owner-access cases. Use real-model evals to
+   assess useful behavior under attack, while deterministic tests establish
+   access rules independently of model cooperation.
+
+Reference: [LangChain runtime context](https://docs.langchain.com/oss/python/langchain/runtime)
+and [Agent Server authentication and authorization](https://docs.langchain.com/langsmith/auth).
+These integration points do not replace application and storage enforcement.
+
 ### Lesson 7 plan. Persistent conversations
 
 Status: Steps 7.1 through 7.3 verified offline, 2026-10-14.
