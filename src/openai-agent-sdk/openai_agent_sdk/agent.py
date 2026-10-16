@@ -16,6 +16,7 @@ from agents import (
     RunHooks,
     Runner,
     Session,
+    SessionSettings,
     TResponseInputItem,
     function_tool,
 )
@@ -31,6 +32,7 @@ from .contracts import (
     LiveJobPosting,
 )
 from .filtering import SearchCriteria, parse_criteria
+from .identity import Identity, OwnedSession, UserResources
 from .jsearch import JSearchError
 from .matching import assess_fit as assess_live_fit
 from .openwebninja_mcp import OpenWebNinjaAdapter
@@ -44,6 +46,7 @@ MAX_TURNS = 8
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 16
 RUN_TIMEOUT_SECONDS = 60
+MAX_CONTEXT_TURNS = 5
 _SAVE_VERB = r"(?:save|store|bookmark)"
 _SAVE_REQUEST = re.compile(
     rf"(?:^|\b(?:and|then|also)\s+)(?:please\s+)?{_SAVE_VERB}\b"
@@ -64,9 +67,15 @@ class JobAgentContext:
     """Per-turn permission that local code does not expose to the model."""
 
     save_allowed: bool
+    identity: Identity | None = None
     criteria: SearchCriteria = SearchCriteria()
     searched_jobs: dict[str, LiveJobPosting] = field(default_factory=dict)
     tool_traces: list[ToolTrace] = field(default_factory=list)
+
+
+@dataclass
+class OwnedAgent(Agent[JobAgentContext]):
+    owner: Identity | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +128,7 @@ def load_instructions() -> str:
 def build_agent(
     model: str | Model | None = None,
     *,
+    resources: UserResources | None = None,
     catalog_path: Path = JOBS_PATH,
     resume_path: Path = RESUME_PATH,
     results_path: Path = RESULTS_PATH,
@@ -140,10 +150,25 @@ def build_agent(
     if selected_provider == "mcp" and mcp_adapter is None:
         raise ValueError("MCP mode requires an open search session.")
     live_provider = selected_provider in {"jsearch", "mcp"}
+    if resources is not None and (resume_path != RESUME_PATH or
+                                  results_path != RESULTS_PATH):
+        raise ValueError("Scoped agents use owner paths, not private path overrides.")
+
+    def private_path(ctx, name, fallback):
+        if resources is None:
+            if ctx.context.identity is not None:
+                raise PermissionError("An owner-scoped agent is required.")
+            return fallback
+        if ctx.context.identity != resources.identity:
+            raise PermissionError("Agent access denied.")
+        return resources.file(name)
 
     @function_tool
     async def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
+        if resources is not None and ctx.context.identity != resources.identity:
+            raise PermissionError("Agent access denied.")
+
         def operation() -> str:
             output = search_job_records(
                 query, catalog_path=catalog_path,
@@ -188,7 +213,9 @@ def build_agent(
         """Read the candidate's local resume for specific experience evidence."""
         return traced_call(
             ctx, source="local_resume",
-            operation=lambda: read_resume_file(resume_path=resume_path),
+            operation=lambda: read_resume_file(
+                resume_path=private_path(ctx, "resume.md", resume_path)
+            ),
         )
 
     @function_tool
@@ -202,7 +229,8 @@ def build_agent(
             if selected_provider != "mock":
                 return "Error: Saving live jobs is not supported yet."
             return save_results_file(
-                content, results_path=results_path, catalog_path=catalog_path
+                content, results_path=private_path(ctx, "results.md", results_path),
+                catalog_path=catalog_path
             )
 
         return traced_call(ctx, source="local_results", operation=operation)
@@ -211,17 +239,19 @@ def build_agent(
     def assess_fit(ctx: ToolContext[JobAgentContext], job_id: str) -> str:
         """Check a searched job against local resume evidence, without guessing."""
         def operation() -> str:
+            path = private_path(ctx, "resume.md", resume_path)
             job = ctx.context.searched_jobs.get(job_id)
             if job is None:
                 return "Error: Search for this live job in the current turn first."
-            resume = read_resume_file(resume_path=resume_path)
+            resume = read_resume_file(resume_path=path)
             if resume.startswith("Error:"):
                 return resume
             return json.dumps(assess_live_fit(job, resume), ensure_ascii=False)
 
         return traced_call(ctx, source="local_matching", operation=operation)
 
-    return Agent(
+    return OwnedAgent(
+        owner=resources.identity if resources is not None else None,
         name="Job Search Agent",
         instructions=load_instructions() + (
             "\nJSearch mode is active. These are provider results, not fictional mock "
@@ -243,12 +273,20 @@ def build_agent(
     )
 
 
+def _recent_turns(history, new_input):
+    """Keep the latest five user turns, including their tool calls and results."""
+    items = history + new_input
+    starts = [i for i, item in enumerate(items) if item.get("role") == "user"]
+    return items[starts[-MAX_CONTEXT_TURNS:][0]:] if starts else new_input
+
+
 def run_agent(
     user_message: str,
     history: list[TResponseInputItem] | None = None,
     *,
     agent: Agent[JobAgentContext] | None = None,
     session: Session | None = None,
+    identity: Identity | None = None,
     max_turns: int = MAX_TURNS,
     max_model_calls: int = MAX_MODEL_CALLS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -257,7 +295,8 @@ def run_agent(
 ) -> AgentTurn:
     """Synchronous entry point for callers that do not own an event loop."""
     return asyncio.run(run_agent_async(
-        user_message, history, agent=agent, session=session, max_turns=max_turns,
+        user_message, history, agent=agent, session=session, identity=identity,
+        max_turns=max_turns,
         max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
         run_timeout_seconds=run_timeout_seconds, trace_sink=trace_sink,
     ))
@@ -269,6 +308,7 @@ async def run_agent_async(
     *,
     agent: Agent[JobAgentContext] | None = None,
     session: Session | None = None,
+    identity: Identity | None = None,
     max_turns: int = MAX_TURNS,
     max_model_calls: int = MAX_MODEL_CALLS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -287,15 +327,27 @@ async def run_agent_async(
         raise ValueError("Use session or explicit history, not both.")
 
     criteria = parse_criteria(user_message)
-    turn_input: list[TResponseInputItem] = [
-        *(history or []),
-        {"role": "user", "content": user_message},
-    ]
-    selected_agent = agent or build_agent()
-    context = JobAgentContext(
-        save_allowed=explicit_save_requested(user_message), criteria=criteria
+    turn_input = _recent_turns(
+        history or [], [{"role": "user", "content": user_message}]
     )
-    prior_history = await session.get_items() if session is not None else []
+    selected_agent = agent or build_agent(
+        resources=UserResources(identity) if identity is not None else None
+    )
+    # Check trusted ownership before loading any conversation into model input.
+    if getattr(selected_agent, "owner", None) != identity:
+        raise PermissionError("Agent access denied.")
+    if identity is not None and history:
+        raise PermissionError("Scoped conversations require an owner-scoped session.")
+    if isinstance(session, OwnedSession):
+        session.check_owner(identity)
+    elif identity is not None and session is not None:
+        raise PermissionError("An owner-scoped session is required.")
+    context = JobAgentContext(
+        save_allowed=explicit_save_requested(user_message), identity=identity,
+        criteria=criteria
+    )
+    # SQLite limit=-1 reads full history for recovery without changing model limits.
+    prior_history = await session.get_items(limit=-1) if session is not None else []
     sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
     try:
         # shortcut: JSearch ignores mid-call cancellation; use async I/O for hard stops.
@@ -305,6 +357,9 @@ async def run_agent_async(
                 session=session, context=context, max_turns=max_turns,
                 hooks=BudgetHooks(max_model_calls, max_tool_calls),
                 run_config=RunConfig(
+                    # Trim complete turns for the model; retain full SQLite storage.
+                    session_settings=SessionSettings(limit=-1),
+                    session_input_callback=_recent_turns,
                     tracing_disabled=not sdk_tracing,
                     trace_include_sensitive_data=False,
                     workflow_name="Job Search Agent",
@@ -316,12 +371,12 @@ async def run_agent_async(
         if session is not None:
             # shortcut: one writer per session; crash-safe recovery needs transactions.
             try:
-                current = await session.get_items()
+                current = await session.get_items(limit=-1)
                 if current[:len(prior_history)] != prior_history:
                     raise RuntimeError("Stored history changed during the turn.")
                 for _ in range(len(current) - len(prior_history)):
                     await session.pop_item()
-                if await session.get_items() != prior_history:
+                if await session.get_items(limit=-1) != prior_history:
                     raise RuntimeError("Stored history could not be restored.")
             except Exception as error:
                 raise SessionRecoveryError(

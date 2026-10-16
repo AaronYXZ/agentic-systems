@@ -195,6 +195,68 @@ with closing(SQLiteSession("learning", "data/conversations.sqlite3")) as session
 Reset removes that conversation's history without removing other conversations,
 saved recommendations, or the resume. It is not secure erasure of database backups.
 
+### Trusted identity (Lesson 9)
+
+Python callers can now supply a trusted identity and owner-scoped resources.
+This is a local learning boundary, not authentication. The local CLI operator
+can select a synthetic identity before the conversation starts:
+
+```bash
+uv run job-agent --tenant demo --user alice --session learning
+uv run job-agent --tenant demo --user bob --session learning
+```
+
+Supply both `--tenant` and `--user` along with `--session`. Identity mode rejects
+`--session-db`; the database location comes from the owner-scoped resources.
+Both normal and MCP modes use the selected owner's resume, results, and history.
+For Alice, provision a fictional resume at `data/users/demo/alice/resume.md`.
+The first CLI start creates the owner directory. Without identity options, the
+CLI retains its original single-user paths. Existing unscoped history and files
+are not migrated. Startup labels the selected identity as not authenticated.
+Anyone controlling the local CLI can select an identity; do not expose these
+flags as authentication for remote users. Keep one writer per conversation.
+Synthetic IDs are case-insensitive and stored in lowercase: `Alice` and `alice`
+identify the same local account. This avoids private-file aliases on common
+macOS/Windows filesystems. Existing uppercase owner directories are not migrated;
+move any such learning data to the lowercase path while all CLIs are stopped.
+
+``` python
+from contextlib import closing
+from openai_agent_sdk.agent import build_agent, run_agent
+from openai_agent_sdk.identity import Identity, UserResources
+
+# Trusted application code supplies identity. Never obtain it from chat text.
+identity = Identity(tenant_id="demo", user_id="alice")
+resources = UserResources(identity)
+with closing(resources.open_session("learning")) as session:
+    # Provision synthetic content through trusted local code.
+    resources.file("resume.md").write_text("Built Python services.")
+    agent = build_agent(provider="mock", resources=resources)
+    turn = run_agent("Read my resume", identity=identity, agent=agent, session=session)
+    print(turn.text)
+```
+
+Private files live under `data/users/<tenant>/<user>/`, ignored by Git. Each
+owner has a SQLite database; conversation keys also include tenant and user.
+The mock job catalog remains shared public fixture data. Current-turn search
+evidence stays in the invocation context. Save permission still requires a
+current request. Explicit private-path overrides and caller-supplied history
+are rejected in scoped mode. Paths reject traversal and cross-owner symlinks.
+
+Use `await resources.review(session)` and `await resources.reset(session)`
+for owner-checked review and reset. The runner rejects another owner's session
+or agent before loading history. Raw SQLite sessions, direct file functions,
+and the earlier review script remain trusted local capabilities. Do not expose
+them or the unscoped runner to untrusted users. Trusted Python code can open
+any local file; these checks do not sandbox that code or authenticate a user.
+
+Offline verification covers same-tenant and cross-tenant denials, guessed
+conversation/job IDs, forged identity in chat/tool arguments, traversal,
+symlinked files, review/reset, reopening, and failed-turn recovery. Both CLI
+modes retain owner boundaries. There is no jobs database, tenant-wide sharing,
+user-facing report endpoint, or owner-scoped trace retrieval service. Add
+ownership checks and negative tests before exposing such features.
+
 ### Check the installation
 
 ```bash

@@ -84,6 +84,105 @@ existing regression checks and add only the distinct behavior checks needed.
 | 18. Ownership handoffs | After lesson 17's gate, compare handoffs with agents-as-tools | Specialist takes final-answer ownership; context is filtered across transfer | Clear reply owner, preserved tenant/policy limits, bounded total workflow budget |
 | 19. Release and operations | Regression gates, dependency/model/prompt versions, canary release, rollback, redacted metrics | Inject provider outage and bad prompt update | Failed safety gate blocks release; operator can explain, cancel, and roll back a run |
 
+### Decision. Proceed to Lesson 9
+
+2026-10-15: The user chose to skip the rest of Lesson 7b and all of Lesson 8
+for now, and proceed to identity and tenant isolation. These lessons are skipped,
+not completed. Retain the implemented five-turn model-input window and full
+SQLite history reads for recovery. Preference storage, further context-management
+work, and domain persistence remain deferred. Lesson 9 will protect the existing
+files, conversations, and in-memory job evidence without requiring new job tables.
+
+### Lesson 9 to-dos. Identity and tenant isolation
+
+Status: complete for the local synthetic-identity scope, 2026-10-15.
+
+Evaluation dataset: `evals/identity-isolation.json` (version 1) and
+`tests/test_eval_identity.py` add seven scenarios across normal, difficult,
+adversarial, conflicting, and authorization categories. Seven offline policy
+cases and four negative grader checks are implemented. Six real-model cases
+are opt-in and have not been run. See `evals/README.md` for commands and limits.
+
+Goal: two synthetic users can use the agent without reading or changing each
+other's data. Start with one tenant per user and trusted identities injected by
+the application. This lesson does not establish production authentication.
+
+Steps 1–3 implemented on 2026-10-15: immutable `Identity`, owner-scoped
+`UserResources` files and SQLite keys, runner ownership checks before history
+reads, private tool-path checks, and owner-checked review/reset. The shared
+mock catalog is public fixture data. `tests/test_identity.py` verifies allowed
+reads/writes and cross-owner denials with synthetic canaries. Unscoped Python
+calls retain their single-user behavior. This is not a multi-user service.
+
+Step 4 implemented on 2026-10-15: local CLI flags `--tenant` and `--user`
+select the synthetic identity for a persistent `--session`. Scoped mode rejects
+arbitrary `--session-db` paths. Both normal and MCP turns receive owner-scoped
+agents, sessions, and trusted identity. Permission errors stop the loop.
+`tests/test_cli_identity.py` verifies identical conversation names across two
+owners, private reads/writes, failed-turn recovery, reopening, and cleanup in
+both modes. It uses scripted models and real temporary SQLite files without
+network calls.
+
+Steps 5–6 complete: identity checks now run against both same-tenant users and
+the same user name in different tenants. Added denials for guessed serialized
+conversation keys and another owner's retained job ID, and a forced save through
+a symlink to another owner's results. Existing tests cover allowed operations,
+review/reset, chat/tool identity forgery, path traversal, restart, and recovery.
+The filesystem review found case-only ID aliases on macOS. IDs now normalize
+to lowercase, with an explicit case-insensitive identity contract and a test.
+
+Verification: `uv run ruff check .` and root `uv run pytest` pass (15 tests).
+Isolated SDK tests with `RUN_LIVE_AGENT_EVAL=0` pass: 232 passed, 18 skipped.
+Commands used `--no-sync` and a writable temporary uv cache with the existing
+virtual environments. No real-model or provider calls were made.
+
+| Access boundary | Exit evidence |
+|---|---|
+| Resume reads and result writes | Owner-local success; cross-owner agent/path and linked-write denials |
+| Conversation continuation/review/reset | Owner checks precede history reads; guessing keys does not select another owner |
+| Current-turn job evidence | Another owner's searched job cannot be assessed without a current search |
+| CLI normal/MCP lifecycle | Two owners, failed turn, reopen, and cleanup preserve isolation |
+| Identity source | Chat/tool arguments cannot change trusted identity; case-only aliases mean one account |
+
+Scope limits: production authentication, hostile local Python/filesystem access,
+concurrent writers, hard-link/race-resistant filesystem isolation, provider-side
+tenant authorization, tenant-shared resources, and trace-export access control
+are not established. Raw local SQLite scripts remain trusted operator access.
+No private jobs database, preference store, report endpoint, or cache is exposed.
+Add ownership checks and negative tests when those resources are introduced.
+
+1. Define a small immutable identity contract with user and tenant IDs. Supply
+   it through trusted application context, never through model tool arguments,
+   chat text, or a user-selected session ID. Tests supply two fixed identities.
+2. Assign existing resources to their owners. Scope resume/results paths and
+   SQLite conversation keys by trusted identity. Resolve paths in application
+   code; reject cross-owner references before reading history or constructing
+   tools. A known conversation ID must not grant access by itself.
+3. Carry identity through the runner and tool context. Apply ownership checks
+   to resume reads, saves, conversation continuation/reset/review, and any
+   retained job evidence. Keep current-turn save permission and fit checks.
+   History review is currently a local script, so document its trusted local
+   access and exclude it from an untrusted-user interface until checked.
+4. Preserve boundaries across CLI turns and failures. Select synthetic identity
+   at the trusted local entry point, use owner-scoped resources in both normal
+   and MCP modes, and verify recovery only changes that owner's conversation.
+   Do not share resume/results defaults between identities. Keep one writer
+   per conversation; multi-worker execution remains outside this lesson.
+5. Add deterministic negative access tests before any live-model eval. Verify
+   A cannot read B's resume/history/jobs or write/reset B's results/conversation.
+   Include guessed IDs, path traversal, identical conversation names under two
+   owners, forged identity in chat/tool arguments, restart, and failed-turn
+   recovery. Use canary text and assert it never enters A's model input or output.
+   Also verify each owner can still use their own resources successfully.
+6. Run root Ruff/pytest and isolated SDK tests with live calls disabled. Record
+   which access paths passed and which remain unavailable. Any later preference
+   store, domain table, cache, trace export, or report must inherit these ownership
+   rules and negative tests when introduced.
+
+Exit evidence: two synthetic identities pass allowed operations and cross-owner
+denials before private data reaches the model or a write occurs. No production
+authentication, API server, or domain-persistence implementation is required.
+
 ### Lesson 7 plan. Persistent conversations
 
 Status: Steps 7.1 through 7.3 verified offline, 2026-10-14.

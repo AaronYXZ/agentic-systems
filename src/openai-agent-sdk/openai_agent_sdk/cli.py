@@ -24,6 +24,7 @@ from openai_agent_sdk.agent import (
 )
 from openai_agent_sdk.contracts import PROJECT_ROOT
 from openai_agent_sdk.filtering import CriteriaError
+from openai_agent_sdk.identity import Identity, UserResources
 from openai_agent_sdk.openwebninja_mcp import OpenWebNinjaAdapter, open_search_session
 from openai_agent_sdk.tool_tracing import ToolTrace
 
@@ -37,6 +38,7 @@ class ConfigurationError(Exception):
 def _run_live_turn(
     message: str, history: list[TResponseInputItem] | None,
     *, session: SQLiteSession | None = None,
+    resources: UserResources | None = None,
 ) -> AgentTurn:
     """Check local configuration before calling the model-backed runner."""
     load_dotenv(PROJECT_ROOT / ".env")
@@ -48,6 +50,8 @@ def _run_live_turn(
     return run_agent(
         message, history, trace_sink=_print_trace if local_tracing else None,
         **({"session": session} if session is not None else {}),
+        **({"identity": resources.identity, "agent": build_agent(resources=resources)}
+           if resources is not None else {}),
     )
 
 
@@ -89,6 +93,11 @@ async def _run_cli_loop(
                 continue
             try:
                 turn = await agent_fn(message, history)
+            except PermissionError:
+                output_fn(
+                    "Agent > Access denied. Stop and check the selected identity."
+                )
+                break
             except (sqlite3.Error, SessionRecoveryError):
                 output_fn(
                     "Agent > Conversation storage or recovery failed. "
@@ -138,16 +147,34 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Local job search agent")
     parser.add_argument("--session", help="Conversation ID to create or resume")
     parser.add_argument("--session-db", type=Path, help="SQLite database path")
+    parser.add_argument("--tenant", help="Synthetic local tenant ID")
+    parser.add_argument("--user", help="Synthetic local user ID (not authentication)")
     args = parser.parse_args(argv)
     if args.session is not None and not args.session.strip():
         parser.error("--session must not be blank")
     if args.session_db is not None and args.session is None:
         parser.error("--session-db requires --session")
+    if (args.tenant is None) != (args.user is None):
+        parser.error("--tenant and --user must be supplied together")
+    resources = None
+    if args.user is not None:
+        if args.session is None or args.session_db is not None:
+            parser.error("Identity mode requires --session and disallows --session-db")
+        try:
+            resources = UserResources(Identity(args.tenant, args.user))
+        except ValueError as error:
+            parser.error(str(error))
     load_dotenv(PROJECT_ROOT / ".env")
     db_path = args.session_db or PROJECT_ROOT / "data" / "conversations.sqlite3"
     try:
-        manager = (closing(SQLiteSession(args.session, db_path))
-                   if args.session is not None else nullcontext(None))
+        if resources is not None:
+            manager = closing(resources.open_session(args.session))
+            db_path = resources.file("conversations.sqlite3")
+            print(f"Local identity: {resources.identity.tenant_id}/"
+                  f"{resources.identity.user_id} (not authenticated)")
+        else:
+            manager = (closing(SQLiteSession(args.session, db_path))
+                       if args.session is not None else nullcontext(None))
         with manager as session:
             if session is not None:
                 print(f"Conversation: {args.session} | Database: {db_path.resolve()}")
@@ -155,8 +182,11 @@ def main(argv: list[str] | None = None) -> None:
                 if session is None:
                     run_cli()
                 else:
-                    run_cli(agent_fn=partial(_run_live_turn, session=session),
-                            persistent=True)
+                    options = {"resources": resources} if resources is not None else {}
+                    run_cli(
+                        agent_fn=partial(_run_live_turn, session=session, **options),
+                        persistent=True,
+                    )
                 return
             if not os.getenv("OPENAI_API_KEY", "").strip():
                 raise ConfigurationError("OPENAI_API_KEY is missing. Add it to .env.")
@@ -165,7 +195,9 @@ def main(argv: list[str] | None = None) -> None:
                 local_tracing = os.getenv("JOB_AGENT_LOCAL_TRACING", "false").lower()
                 return await run_agent_async(
                     message, history, session=session,
-                    agent=build_agent(provider="mcp", mcp_adapter=adapter),
+                    identity=resources.identity if resources is not None else None,
+                    agent=build_agent(provider="mcp", mcp_adapter=adapter,
+                                      resources=resources),
                     trace_sink=_print_trace if local_tracing == "true" else None,
                 )
 
