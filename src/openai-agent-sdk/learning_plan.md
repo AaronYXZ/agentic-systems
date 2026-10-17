@@ -160,8 +160,8 @@ required for this next lesson.
 
 ### Lesson 11 to-dos. Injection defense
 
-Status: steps 1–5 complete for the documented local scope on 2026-10-16;
-steps 6–7 remain planned.
+Status: steps 1–6 complete for the documented local scope on 2026-10-16;
+step 7 remains planned.
 
 1. Map untrusted inputs: resume text, mock/online job descriptions, MCP results,
    retrieved documents, and replayed tool output. Identify the tool boundary each
@@ -351,6 +351,35 @@ in the request are not detected. Authorized recommendation prose is not grounded
 or sanitized by this change. Low-level provider/storage functions remain trusted
 Python APIs; the user-facing agent tools enforce this policy. Broader adversarial
 regression and review remain steps 6–7.
+
+#### Lesson 11 step 6. Adversarial regression
+
+Steps 4–5 were committed as `adcce75` before this implementation.
+`tests/test_injection_defense.py` adds 16 deterministic sequence checks: four
+forced attacks across resume text, retrieved documents, normalized MCP job
+results, and a document result replayed from an owner-scoped SQLite session.
+
+Each case first asserts that the malicious tool output reached the scripted
+model, then forces one attempted tenant change, path override, unauthorized
+save, or outbound private-canary query. The checks assert a denial trace,
+expected resume-read and provider-call counts, unchanged other-owner files,
+no results file, and no other-owner canary in model input/history. An allowed
+owner resume read and copied search query follow each denial and must succeed.
+Existing checks retain coverage for mock writes, quoted permission, legitimate
+saves, credential filtering, and named-job save restrictions.
+
+No production-code changes were needed for these cases. Root Ruff passed;
+root pytest: 15 passed; isolated SDK pytest: 329 passed, 24 skipped, with live
+calls disabled. Run the new set from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_injection_defense.py -v`.
+
+This is a fixed regression set for application enforcement. The scripted model
+requests the attack deliberately, and its final text is not graded as evidence
+of resistance. No real-model/provider calls or trace-export runs were made.
+The text-policy and credential-detection limits from steps 4–5 still apply.
+The cross-source matrix uses a fake MCP provider; prior step-4–5 tests cover
+both HTTP and MCP outbound boundaries. Step 7 remains the final prompt and
+limits review for this lesson.
 
 ### Decision. Proceed to Lesson 9
 
