@@ -100,3 +100,133 @@ def test_only_latest_user_message_is_checked():
                      agent=build_agent(model=model, provider="mock"))
     assert turn.text == "Allowed"
     assert RESTRICTED_MARKER in repr(model.inputs)
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["blocking", "parallel"])
+def test_input_guardrail_execution_order(tmp_path, parallel):
+    from agents import (
+        Agent,
+        GuardrailFunctionOutput,
+        RunConfig,
+        Runner,
+        function_tool,
+        input_guardrail,
+    )
+
+    async def check():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        written = asyncio.Event()
+        events = []
+        path = tmp_path / "simulated-action.txt"
+
+        @input_guardrail(run_in_parallel=parallel)
+        async def delayed_check(ctx, agent, input):
+            events.append("check_started")
+            entered.set()
+            await release.wait()
+            events.append("check_rejected")
+            return GuardrailFunctionOutput(
+                output_info={"reason": "demonstration"}, tripwire_triggered=True
+            )
+
+        @function_tool
+        async def simulated_write() -> str:
+            """Write one synthetic marker in this test's temporary directory."""
+            path.write_text("SIMULATED-ACTION")
+            events.append("tool_written")
+            written.set()
+            return "Written"
+
+        class ObservedModel(ScriptedModel):
+            async def get_response(self, *args, **kwargs):
+                await entered.wait()
+                events.append("model_started")
+                return await super().get_response(*args, **kwargs)
+
+        model = ObservedModel([
+            [_call("simulated_write", {}, "write")], [_answer("Finished")],
+        ])
+        # Test-only agent. Production restricted_input stays blocking.
+        agent = Agent(name="Guardrail ordering demo", model=model,
+                      tools=[simulated_write], input_guardrails=[delayed_check])
+        task = asyncio.create_task(Runner.run(
+            agent, "Perform the simulated action",
+            run_config=RunConfig(tracing_disabled=True),
+        ))
+        try:
+            await entered.wait()
+            if parallel:
+                await written.wait()
+                assert path.read_text() == "SIMULATED-ACTION"
+                assert events == ["check_started", "model_started", "tool_written"]
+            else:
+                assert model.inputs == []
+                assert not path.exists()
+                assert events == ["check_started"]
+        finally:
+            release.set()
+            with pytest.raises(InputGuardrailTripwireTriggered):
+                await task
+
+        assert events[-1] == "check_rejected"
+        assert len(model.inputs) == int(parallel)
+        assert path.exists() is parallel
+        print(f"parallel={parallel}: {' -> '.join(events)}")
+
+    # This is a deadlock limit, not a timing-based ordering assertion.
+    asyncio.run(asyncio.wait_for(check(), timeout=5))
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize("answer", ["[RESTRICTED-DEMO]", "Result [restricted-demo]"])
+def test_output_tripwire_does_not_return_rejected_answer(tmp_path, scoped, answer):
+    from agents.exceptions import OutputGuardrailTripwireTriggered
+
+    resources = UserResources(Identity("demo", "alice"), tmp_path) if scoped else None
+    model = ScriptedModel([[_answer(answer)]])
+    with pytest.raises(OutputGuardrailTripwireTriggered) as error:
+        run_agent("Return the result", identity=resources.identity if scoped else None,
+                  agent=build_agent(model=model, resources=resources, provider="mock"))
+    assert len(model.inputs) == 1
+    assert error.value.guardrail_result.output.output_info == {
+        "reason": "restricted_marker"
+    }
+
+
+def test_output_rejection_recovers_history_but_does_not_undo_save(tmp_path):
+    from agents.exceptions import OutputGuardrailTripwireTriggered
+
+    async def check():
+        resources = UserResources(Identity("demo", "alice"), tmp_path)
+        model = ScriptedModel([
+            [_answer("Before")],
+            [_call("save_results", {"content": "job-001: Synthetic fit"}, "save")],
+            [_answer(RESTRICTED_MARKER)],
+            [_answer("After")],
+        ])
+        agent = build_agent(model=model, resources=resources, provider="mock")
+        records = []
+        with closing(resources.open_session("output-check")) as session:
+            await run_agent_async("Hello", identity=resources.identity,
+                                  agent=agent, session=session)
+            before = await resources.review(session)
+            with pytest.raises(OutputGuardrailTripwireTriggered):
+                await run_agent_async("Save job-001", identity=resources.identity,
+                                      agent=agent, session=session,
+                                      trace_sink=records.append)
+            assert await resources.review(session) == before
+            assert "job-001" in resources.file("results.md").read_text()
+            trace, = records
+            assert (trace.tool_name, trace.outcome) == ("save_results", "success")
+            assert RESTRICTED_MARKER not in repr(records)
+            turn = await run_agent_async("Continue", identity=resources.identity,
+                                         agent=agent, session=session)
+            assert turn.text == "After"
+            assert model.inputs[-1] == [
+                *before, {"role": "user", "content": "Continue"}
+            ]
+        with closing(resources.open_session("output-check")) as reopened:
+            assert await resources.review(reopened) == turn.history
+
+    asyncio.run(check())

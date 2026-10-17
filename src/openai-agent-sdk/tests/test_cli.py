@@ -325,3 +325,47 @@ def test_main_closes_persistent_session_and_mcp_connection(
     cli.main(["--session", "A", "--session-db", str(tmp_path / "history.db")])
     assert sessions[0]._closed
     assert events == (["open", "close"] if provider == "mcp" else [])
+
+
+@pytest.mark.parametrize("stage", ["input", "output"])
+@pytest.mark.parametrize("tracing", [False, True])
+def test_guardrail_rejections_are_safe_and_cli_continues(
+    stage, tracing, monkeypatch, capsys
+):
+    import json
+
+    from openai_agent_sdk.agent import build_agent, run_agent
+    from openai_agent_sdk.guardrails import RESTRICTED_MARKER
+    from test_agent import ScriptedModel, _answer
+
+    monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
+    monkeypatch.setenv("JOB_AGENT_LOCAL_TRACING", str(tracing).lower())
+    steps = [[_answer("Before")]]
+    if stage == "output":
+        steps.append([_answer("PRIVATE-ANSWER " + RESTRICTED_MARKER)])
+    steps.append([_answer("After")])
+    model = ScriptedModel(steps)
+    agent = build_agent(model=model, provider="mock")
+    outputs = []
+    bad_message = RESTRICTED_MARKER if stage == "input" else "Generate a result"
+    run_cli(input_fn=_input_from("Hello", bad_message, "Continue", "quit"),
+            output_fn=outputs.append,
+            agent_fn=lambda message, history: run_agent(message, history, agent=agent))
+    rejection = (
+        "Agent > Input rejected by policy. Revise your request." if stage == "input"
+        else "Agent > Response withheld by policy. "
+        "Earlier tool actions may already have completed."
+    )
+    assert outputs == ["Agent > Before", rejection, "Agent > After", "Goodbye."]
+    captured = capsys.readouterr()
+    assert RESTRICTED_MARKER not in repr(outputs) + captured.err
+    assert "PRIVATE-ANSWER" not in repr(outputs) + captured.err
+    if tracing:
+        assert json.loads(captured.err) == {
+            "event": "guardrail_rejected", "stage": stage, "reason": "policy_tripwire"
+        }
+    else:
+        assert captured.err == ""
+    assert "Before" in repr(model.inputs[-1])
+    assert "PRIVATE-ANSWER" not in repr(model.inputs[-1])
+    assert bad_message not in repr(model.inputs[-1])

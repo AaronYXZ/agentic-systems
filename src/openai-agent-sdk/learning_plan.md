@@ -438,16 +438,60 @@ Verification: root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
 No live model/provider calls or trace export were run. This demonstrates SDK
 execution order with a literal marker, not general secret/injection detection.
 
-Remaining steps:
+Step 4 implemented on 2026-10-17 after committing/pushing steps 1–3 and the
+Lesson 11 eval dataset as `32d01a8`. A test-only SDK agent compares blocking
+and parallel input checks in `test_input_guardrail_execution_order`. Events
+control execution without sleeps; a five-second timeout only detects deadlock.
+The fake model requests a synthetic tool that writes a marker in a temporary
+file. The production `restricted_input` guardrail remains blocking.
 
-4. Demonstrate parallel input checks in a controlled test; retain blocking
-   execution for required policy checks.
-5. Add an output guardrail and show that output rejection cannot undo earlier
-   tool actions.
-6. Add explicit user-facing rejection handling and safe metadata while keeping
-   session recovery and deterministic tool checks.
-7. Verify both rejection paths, execution ordering, forbidden side effects,
-   and the full regression suite; document observed results and limitations.
+Observed SDK 0.23.1 sequences:
+
+- Blocking: `check_started -> check_rejected`. No model call or tool write.
+- Parallel: `check_started -> model_started -> tool_written -> check_rejected`.
+  The tripwire rejects the run, but the temporary-file write remains.
+
+These are controlled observations, not promises that every parallel run follows
+one schedule. Required pre-action checks must block; later rejection cannot
+undo completed side effects. No new production tools or guardrail modes were
+introduced. Run the demonstration from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_guardrails.py -k execution_order -v -s`.
+Root Ruff passed; root pytest: 15 passed; isolated SDK pytest: 355 passed,
+29 skipped, with live calls disabled. No real model/provider calls were made.
+
+Steps 5–6 implemented on 2026-10-17. Verified installed SDK 0.23.1's
+`output_guardrail` decorator and `OutputGuardrailTripwireTriggered` exception.
+`restricted_output` checks the final string for the same case-insensitive
+`[RESTRICTED-DEMO]` marker. Every `build_agent()` result registers it. The
+runner raises the SDK tripwire instead of returning a rejected `AgentTurn`.
+Existing session recovery restores prior history and collected tool traces
+still reach their configured sink.
+
+The shared CLI loop catches input/output tripwires explicitly. It displays fixed
+messages, preserves accepted replay history, and continues the conversation.
+Output rejection warns that earlier tool actions may have completed. With
+`JOB_AGENT_LOCAL_TRACING=true`, stderr gets only `event`, `stage`, and a fixed
+reason code; neither rejected text nor the raw exception is printed. Storage or
+recovery failures still stop the conversation rather than being hidden as a
+normal rejection. Existing tool checks remain unchanged.
+
+Nine added checks cover scoped/unscoped and lowercase output rejection,
+restored/reopened SQLite history and a later accepted turn, a completed save
+that persists despite output rejection, and CLI input/output handling with
+local tracing enabled/disabled. Accepted outputs remain covered by the suite.
+Root Ruff passed; root pytest: 15 passed; isolated SDK pytest: 364 passed,
+29 skipped, live calls disabled. Run from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_guardrails.py tests/test_cli.py -v`.
+
+Scope: final-output checks do not prevent earlier tool actions, inspect tool
+payloads, or undo writes. The supported CLI buffers final answers; streaming is
+not implemented here. Raw SDK tripwire objects are trusted Python diagnostics
+and must not be serialized by a future API, because they can retain rejected
+output. The controlled CLI messages and metadata are the user-facing boundary.
+No live model/provider or SDK trace-export runs were made.
+
+Remaining step 7: final review of both rejection paths, execution ordering,
+side effects, regression evidence, and documented limitations.
 
 ### Decision. Proceed to Lesson 9
 
@@ -1198,7 +1242,7 @@ uses traces for workflow decisions and datasets for repeatable comparisons.
 
 ### Suggested next lesson
 
-Continue Lesson 12 from step 4, following the 2026-10-17 guardrail work above.
+Continue Lesson 12 with the step-7 final review of the guardrail work above.
 Lesson 11's final review remains open and its real-model evaluations unrun.
 Lesson 10 retrieval evaluations remain skipped. Keep deterministic enforcement
 evidence separate from model-quality results. Investigate the live MCP timeout

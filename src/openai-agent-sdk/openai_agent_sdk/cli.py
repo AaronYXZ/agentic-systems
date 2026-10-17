@@ -13,6 +13,10 @@ from functools import partial
 from pathlib import Path
 
 from agents import SQLiteSession, TResponseInputItem
+from agents.exceptions import (
+    InputGuardrailTripwireTriggered,
+    OutputGuardrailTripwireTriggered,
+)
 from dotenv import load_dotenv
 
 from openai_agent_sdk.agent import (
@@ -93,6 +97,20 @@ async def _run_cli_loop(
                 continue
             try:
                 turn = await agent_fn(message, history)
+            except (InputGuardrailTripwireTriggered,
+                    OutputGuardrailTripwireTriggered) as error:
+                stage = ("input" if isinstance(error, InputGuardrailTripwireTriggered)
+                         else "output")
+                if os.getenv("JOB_AGENT_LOCAL_TRACING", "false").lower() == "true":
+                    print(json.dumps({"event": "guardrail_rejected", "stage": stage,
+                                      "reason": "policy_tripwire"}), file=sys.stderr)
+                output_fn(
+                    "Agent > Input rejected by policy. Revise your request."
+                    if stage == "input" else
+                    "Agent > Response withheld by policy. "
+                    "Earlier tool actions may already have completed."
+                )
+                continue
             except PermissionError:
                 output_fn(
                     "Agent > Access denied. Stop and check the selected identity."
