@@ -160,8 +160,8 @@ required for this next lesson.
 
 ### Lesson 11 to-dos. Injection defense
 
-Status: steps 1–2 complete for the documented local scope on 2026-10-16;
-steps 3–7 remain planned.
+Status: steps 1–3 complete for the documented local scope on 2026-10-16;
+steps 4–7 remain planned.
 
 1. Map untrusted inputs: resume text, mock/online job descriptions, MCP results,
    retrieved documents, and replayed tool output. Identify the tool boundary each
@@ -273,6 +273,36 @@ secret detector. Source labels are operator-provided and remain visible.
 Provider-side logs, SDK-exported trace payloads, and process stderr were not
 validated end to end. Outbound disclosure of already model-visible text remains
 step 5. This review does not establish real-model injection resistance.
+
+#### Lesson 11 step 3. Tool-boundary access checks
+
+Implemented on 2026-10-16. `build_agent()` now uses one shared `check_access`
+helper in every registered tool, including both HTTP/mock and MCP search paths.
+The tool checks context identity against its bound owner before any protected
+operation. Unscoped tools require an unscoped context. Checks execute inside
+existing tracing wrappers, so access denials produce metadata-only error traces.
+
+The helper rejects unexpected raw tool arguments before I/O. The SDK can ignore
+extra fields while parsing function arguments; a strict advertised schema alone
+did not reject those requests. Forged identity/path fields now fail instead of
+being silently ignored. Existing private path resolution still runs at access
+time, and live fit assessment still requires a current-turn searched job before
+reading the resume. No resource lookup uses document claims as authorization.
+
+`tests/test_tool_access.py` adds 35 deterministic checks: all tools and search
+transports reject missing/wrong owners and extra arguments before mocked I/O;
+unscoped searches reject scoped contexts; changed private paths cannot follow
+links into another owner's files; a guessed fit ID cannot trigger a resume
+read. Existing owner-success, isolation, and per-turn evidence tests still pass.
+These direct tool invocations exercise enforcement without depending on runner
+ownership checks or model cooperation.
+
+Verification: root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
+289 passed, 24 skipped, live calls disabled. Step 3 changes remain separate from
+commit `873efdb`, which records Lesson 10 and Lesson 11 steps 1–2.
+No live model/provider calls were made. The trusted local Python/filesystem scope
+is unchanged. Write-intent parsing and outbound private-text disclosure remain
+steps 4 and 5; this is not complete injection resistance.
 
 ### Decision. Proceed to Lesson 9
 

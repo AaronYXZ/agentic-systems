@@ -155,22 +155,22 @@ def build_agent(
                                   results_path != RESULTS_PATH):
         raise ValueError("Scoped agents use owner paths, not private path overrides.")
 
-    def private_path(ctx, name, fallback):
-        if resources is None:
-            if ctx.context.identity is not None:
-                raise PermissionError("An owner-scoped agent is required.")
-            return fallback
-        if ctx.context.identity != resources.identity:
+    def check_access(ctx, *arguments):
+        owner = resources.identity if resources is not None else None
+        if ctx.context.identity != owner:
             raise PermissionError("Agent access denied.")
-        return resources.file(name)
+        # SDK argument parsing can ignore extra fields; reject authority overrides.
+        if set(json.loads(ctx.tool_arguments or "{}")) - set(arguments):
+            raise PermissionError("Unexpected tool arguments.")
+
+    def private_path(name, fallback):
+        return resources.file(name) if resources is not None else fallback
 
     @function_tool
     async def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
-        if resources is not None and ctx.context.identity != resources.identity:
-            raise PermissionError("Agent access denied.")
-
         def operation() -> str:
+            check_access(ctx, "query")
             output = search_job_records(
                 query, catalog_path=catalog_path,
                 provider=selected_provider,
@@ -186,6 +186,7 @@ def build_agent(
 
         if selected_provider == "mcp":
             async def mcp_operation() -> str:
+                check_access(ctx, "query")
                 if not query.strip():
                     return "Error: Search query cannot be empty."
                 provider_query, options = provider_request(query, ctx.context.criteria)
@@ -213,8 +214,7 @@ def build_agent(
     def search_documents(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search your local job/company documents and return source excerpts."""
         def operation() -> str:
-            if resources is None or ctx.context.identity != resources.identity:
-                raise PermissionError("Document access denied.")
+            check_access(ctx, "query")
             return json.dumps([
                 {
                     "document_id": doc.document_id, "kind": doc.kind,
@@ -229,17 +229,17 @@ def build_agent(
     @function_tool
     def read_resume(ctx: ToolContext[JobAgentContext]) -> str:
         """Read the candidate's local resume for specific experience evidence."""
-        return traced_call(
-            ctx, source="local_resume",
-            operation=lambda: read_resume_file(
-                resume_path=private_path(ctx, "resume.md", resume_path)
-            ),
-        )
+        def operation() -> str:
+            check_access(ctx)
+            return read_resume_file(resume_path=private_path("resume.md", resume_path))
+
+        return traced_call(ctx, source="local_resume", operation=operation)
 
     @function_tool
     def save_results(ctx: ToolContext[JobAgentContext], content: str) -> str:
         """Save catalog job IDs and recommendation text only on user request."""
         def operation() -> str:
+            check_access(ctx, "content")
             if not ctx.context.save_allowed:
                 return (
                     "Error: Saving requires an explicit request in the current message."
@@ -247,7 +247,7 @@ def build_agent(
             if selected_provider != "mock":
                 return "Error: Saving live jobs is not supported yet."
             return save_results_file(
-                content, results_path=private_path(ctx, "results.md", results_path),
+                content, results_path=private_path("results.md", results_path),
                 catalog_path=catalog_path
             )
 
@@ -257,7 +257,8 @@ def build_agent(
     def assess_fit(ctx: ToolContext[JobAgentContext], job_id: str) -> str:
         """Check a searched job against local resume evidence, without guessing."""
         def operation() -> str:
-            path = private_path(ctx, "resume.md", resume_path)
+            check_access(ctx, "job_id")
+            path = private_path("resume.md", resume_path)
             job = ctx.context.searched_jobs.get(job_id)
             if job is None:
                 return "Error: Search for this live job in the current turn first."
