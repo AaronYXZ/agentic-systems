@@ -381,6 +381,74 @@ The cross-source matrix uses a fake MCP provider; prior step-4–5 tests cover
 both HTTP and MCP outbound boundaries. Step 7 remains the final prompt and
 limits review for this lesson.
 
+#### Lesson 11 evaluation. Opt-in model behavior
+
+Added on 2026-10-16 at the user's request. This does not resume the skipped
+Lesson 10 retrieval-quality evaluations. Dataset `evals/injection-defense.json`
+(version 1) and `tests/test_eval_injection.py` add five cases: normal document
+access, injected resume save, document identity override, MCP outbound private
+query, and an injected document retained across SQLite turns.
+
+Application side effects and attempted unsafe calls are reported separately.
+Offline trajectories force each attack and check policy denial. Live mode lets
+the model choose tools and requires zero unsafe attempts, accessible evidence,
+and the exact requested marker without private/foreign disclosure. A blocked
+attack can pass enforcement checks while failing the model-behavior check.
+Seven negative grader tests reject bad answers/history/trajectories.
+
+Verified offline: five policy cases and seven grader checks passed; five paid
+model cases skipped. Root Ruff and 15 root tests passed; full isolated SDK suite:
+341 passed, 29 skipped, with live calls disabled. No real-model/provider calls
+or trace export were run. Each live case allows six model starts, eight tool
+starts, and 45 seconds; five cases allow up to 30 model starts, plus applicable
+provider retry behavior. Provider results remain synthetic in both modes.
+Commands and limitations are in `evals/README.md`. This dataset is ready to run,
+not evidence of real-model injection resistance. Lesson 11 step 7 remains open.
+
+### Lesson 12 progress. Guardrails
+
+Steps 1–3 implemented on 2026-10-17. Lesson 11's final step-7 review remains
+open, and its real-model evaluations remain unrun.
+
+1. Verified installed SDK 0.23.1: `input_guardrail` defaults to parallel
+   execution; `GuardrailFunctionOutput` carries the result; a triggered input
+   check raises `InputGuardrailTripwireTriggered`. The SDK runner executes
+   blocking input guardrails before starting model execution.
+2. Added `openai_agent_sdk/guardrails.py` with a narrow synthetic policy:
+   reject `[RESTRICTED-DEMO]`, ignoring case, in the current user message.
+   `latest_user_text()` handles a text string or the latest user message in a
+   list of conversation items. Unsupported non-text user content fails rather
+   than silently passing. Quoted/fenced text is included in the check.
+3. Registered `restricted_input` on every `build_agent()` result using
+   `run_in_parallel=False`. Tripwires propagate through existing runner session
+   recovery. Only an allowed/restricted reason code is added to guardrail output
+   metadata; rejected text is not copied into that metadata. Existing ownership,
+   save, outbound-query, and budget checks remain active.
+
+`tests/test_guardrails.py` adds 12 offline checks for allowed model/tool
+execution, blocked raw/lowercase/quoted/fenced markers in scoped and unscoped
+agents, zero model/tool execution after rejection, unchanged and reopenable
+session history, a successful later turn, and current-message-only scope.
+An old marker can still be model-visible in historical evidence; this input
+policy intentionally does not scan history or tool output.
+
+Verification: root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
+353 passed, 29 skipped, with live calls disabled. Run from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_guardrails.py -v`.
+No live model/provider calls or trace export were run. This demonstrates SDK
+execution order with a literal marker, not general secret/injection detection.
+
+Remaining steps:
+
+4. Demonstrate parallel input checks in a controlled test; retain blocking
+   execution for required policy checks.
+5. Add an output guardrail and show that output rejection cannot undo earlier
+   tool actions.
+6. Add explicit user-facing rejection handling and safe metadata while keeping
+   session recovery and deterministic tool checks.
+7. Verify both rejection paths, execution ordering, forbidden side effects,
+   and the full regression suite; document observed results and limitations.
+
 ### Decision. Proceed to Lesson 9
 
 2026-10-15: The user chose to skip the rest of Lesson 7b and all of Lesson 8
@@ -1130,10 +1198,11 @@ uses traces for workflow decisions and datasets for repeatable comparisons.
 
 ### Suggested next lesson
 
-Proceed to Lesson 11 using the checklist above, per the 2026-10-16 decision.
-Lesson 10 retrieval evaluations remain skipped. Keep one lesson per commit
-and distinguish deterministic enforcement evidence from model-quality results.
-Investigate the live MCP timeout separately; no live run is authorized here.
+Continue Lesson 12 from step 4, following the 2026-10-17 guardrail work above.
+Lesson 11's final review remains open and its real-model evaluations unrun.
+Lesson 10 retrieval evaluations remain skipped. Keep deterministic enforcement
+evidence separate from model-quality results. Investigate the live MCP timeout
+separately; no live run is authorized here.
 
 Every implementation lesson runs the root Ruff and pytest checks plus isolated
 SDK tests. Planning-only changes need a document review, not new code tests.

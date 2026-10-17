@@ -32,6 +32,7 @@ from .contracts import (
     LiveJobPosting,
 )
 from .filtering import SearchCriteria, parse_criteria
+from .guardrails import restricted_input
 from .identity import Identity, OwnedSession, UserResources
 from .jsearch import JSearchError
 from .matching import assess_fit as assess_live_fit
@@ -305,6 +306,7 @@ def build_agent(
     return OwnedAgent(
         owner=resources.identity if resources is not None else None,
         name="Job Search Agent",
+        input_guardrails=[restricted_input],
         instructions=load_instructions() + (
             "\nJSearch mode is active. These are provider results, not fictional mock "
             "data. Report the source and retrieval time. Do not claim jobs are "
