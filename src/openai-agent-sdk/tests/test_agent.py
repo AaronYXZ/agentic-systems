@@ -285,7 +285,7 @@ def test_live_agent_search_filters_then_checks_fit_with_local_evidence(
         )]
 
     model = ScriptedModel([
-        [_call("search_jobs", {"query": "Python engineer"}, "search-1")],
+        [_call("search_jobs", {"query": "Python"}, "search-1")],
         after_search,
         after_fit,
     ])

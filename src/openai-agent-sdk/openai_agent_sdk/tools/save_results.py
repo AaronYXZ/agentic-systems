@@ -18,12 +18,14 @@ def save_results(
     *,
     results_path: Path = RESULTS_PATH,
     catalog_path: Path = JOBS_PATH,
+    allowed_job_ids: frozenset[str] | None = None,
 ) -> str:
     """Save one ``job-ID: recommendation`` line per catalog job.
 
     All lines and job IDs are validated before the results file is changed.
     Existing IDs are skipped. This function performs the write when called;
     the agent must enforce the user's explicit save intent before calling it.
+    When supplied, allowed_job_ids restricts the entire batch before any I/O.
     """
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     if not lines:
@@ -38,6 +40,9 @@ def save_results(
         if job_id in recommendations:
             return f"Error: Duplicate job ID in request: {job_id}."
         recommendations[job_id] = recommendation.strip()
+
+    if allowed_job_ids is not None and not recommendations.keys() <= allowed_job_ids:
+        return "Error: Saving is limited to job IDs named in the current request."
 
     catalog = load_catalog(catalog_path)
     if catalog is None:

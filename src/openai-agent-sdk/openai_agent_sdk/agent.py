@@ -68,6 +68,8 @@ class JobAgentContext:
     """Per-turn permission that local code does not expose to the model."""
 
     save_allowed: bool
+    request_text: str = ""
+    save_job_ids: frozenset[str] | None = None
     identity: Identity | None = None
     criteria: SearchCriteria = SearchCriteria()
     searched_jobs: dict[str, LiveJobPosting] = field(default_factory=dict)
@@ -114,9 +116,20 @@ class BudgetHooks(RunHooks[JobAgentContext]):
         self.tool_calls += 1
 
 
+def unquoted_request(message: str) -> str:
+    """Exclude quoted evidence from current-request authorization."""
+    text = re.sub(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", " ", message, flags=re.S)
+    text = re.sub(r"(?m)^[ \t]*>[^\n]*", " ", text)
+    return re.sub(
+        r"""`[^`\n]*(?:`|$)|"[^"\n]*(?:"|$)|(?<!\w)'[^'\n]*(?:'(?!\w)|$)""",
+        " ", text, flags=re.M,
+    )
+
+
 def explicit_save_requested(message: str) -> bool:
-    """Allow clear affirmative save requests in the current user message."""
-    return bool(_SAVE_REQUEST.search(message) and not _SAVE_NEGATION.search(message))
+    """Allow affirmative save requests outside quoted evidence in this turn."""
+    text = unquoted_request(message)
+    return bool(_SAVE_REQUEST.search(text) and not _SAVE_NEGATION.search(text))
 
 
 def load_instructions() -> str:
@@ -166,13 +179,31 @@ def build_agent(
     def private_path(name, fallback):
         return resources.file(name) if resources is not None else fallback
 
+    def external_query(ctx, query):
+        query = query.strip()
+        match = re.search(re.escape(query), ctx.context.request_text, re.IGNORECASE)
+        if not query or len(query) > 200 or match is None:
+            raise PermissionError(
+                "External search query must be copied from the current request "
+                "and contain 1–200 characters."
+            )
+        approved = match.group()
+        outbound, _ = provider_request(approved, ctx.context.criteria)
+        secrets = (selected_key, os.getenv("OPENAI_API_KEY", ""),
+                   os.getenv("OPENWEBNINJA_API_KEY", ""))
+        if any(secret and secret.casefold() in outbound.casefold()
+               for secret in secrets):
+            raise PermissionError("External search cannot contain credentials.")
+        return approved
+
     @function_tool
     async def search_jobs(ctx: ToolContext[JobAgentContext], query: str) -> str:
         """Search jobs by role, skill, or location using the configured source."""
         def operation() -> str:
             check_access(ctx, "query")
+            approved_query = external_query(ctx, query) if live_provider else query
             output = search_job_records(
-                query, catalog_path=catalog_path,
+                approved_query, catalog_path=catalog_path,
                 provider=selected_provider,
                 api_key=selected_key,
                 criteria=ctx.context.criteria,
@@ -187,9 +218,10 @@ def build_agent(
         if selected_provider == "mcp":
             async def mcp_operation() -> str:
                 check_access(ctx, "query")
-                if not query.strip():
-                    return "Error: Search query cannot be empty."
-                provider_query, options = provider_request(query, ctx.context.criteria)
+                approved_query = external_query(ctx, query)
+                provider_query, options = provider_request(
+                    approved_query, ctx.context.criteria
+                )
                 result = await mcp_adapter.search(provider_query, **options)
                 output = format_live_results(result, ctx.context.criteria)
                 if not output.startswith("Error:"):
@@ -248,7 +280,8 @@ def build_agent(
                 return "Error: Saving live jobs is not supported yet."
             return save_results_file(
                 content, results_path=private_path("results.md", results_path),
-                catalog_path=catalog_path
+                catalog_path=catalog_path,
+                allowed_job_ids=ctx.context.save_job_ids,
             )
 
         return traced_call(ctx, source="local_results", operation=operation)
@@ -349,7 +382,8 @@ async def run_agent_async(
     if session is not None and history:
         raise ValueError("Use session or explicit history, not both.")
 
-    criteria = parse_criteria(user_message)
+    request_text = unquoted_request(user_message)
+    criteria = parse_criteria(request_text)
     turn_input = _recent_turns(
         history or [], [{"role": "user", "content": user_message}]
     )
@@ -367,6 +401,9 @@ async def run_agent_async(
         raise PermissionError("An owner-scoped session is required.")
     context = JobAgentContext(
         save_allowed=explicit_save_requested(user_message), identity=identity,
+        request_text=request_text,
+        save_job_ids=(frozenset(re.findall(r"\bjob-\d+\b", request_text))
+                      if re.search(r"\bjob-\d+\b", user_message) else None),
         criteria=criteria
     )
     # SQLite limit=-1 reads full history for recovery without changing model limits.

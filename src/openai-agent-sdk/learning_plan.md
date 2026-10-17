@@ -160,8 +160,8 @@ required for this next lesson.
 
 ### Lesson 11 to-dos. Injection defense
 
-Status: steps 1–3 complete for the documented local scope on 2026-10-16;
-steps 4–7 remain planned.
+Status: steps 1–5 complete for the documented local scope on 2026-10-16;
+steps 6–7 remain planned.
 
 1. Map untrusted inputs: resume text, mock/online job descriptions, MCP results,
    retrieved documents, and replayed tool output. Identify the tool boundary each
@@ -303,6 +303,54 @@ commit `873efdb`, which records Lesson 10 and Lesson 11 steps 1–2.
 No live model/provider calls were made. The trusted local Python/filesystem scope
 is unchanged. Write-intent parsing and outbound private-text disclosure remain
 steps 4 and 5; this is not complete injection resistance.
+
+#### Lesson 11 steps 4–5. Write and outbound policy
+
+Step 3 was committed as `0991014` before this implementation.
+
+Step 4: `unquoted_request()` removes fenced blocks, quoted lines, and inline
+quotes/backticks (including an unclosed quote through the end of its line) before deriving save permission and search criteria.
+Current-turn context holds allowed job IDs. If the request names IDs, only IDs
+outside quotes are eligible. IDs appearing only inside quotes cannot turn a
+specific request into unrestricted selection. `save_results()` checks the
+entire batch against the allowed IDs before catalog/file I/O. Requests without
+named IDs still permit model selection when saving is explicitly requested.
+Owner/path checks, per-turn permission reset, and live-save denial remain active.
+
+Step 5: before HTTP or MCP search starts, `external_query()` requires a
+nonempty query of at most 200 characters copied from the current unquoted user
+request. Matching ignores case but forwards the original user's text. A resume,
+retrieved document, provider result, prior turn, or model cannot introduce a new
+query phrase. Trusted role/location filters still append through
+`provider_request()`. The final query, including appended filters, is checked
+against configured JSearch, OpenAI, and OpenWeb Ninja credential values.
+Rejections occur before provider calls and yield metadata-only denial traces.
+Mock/local retrieval does not send queries externally. The versioned prompt
+explains copied queries, clarification when needed, and save restrictions.
+
+`tests/test_action_policy.py` adds 24 deterministic checks covering quoted/fenced
+save instructions, malicious resume/document/job text, atomic denial of an
+out-of-scope save batch, an allowed save, permission reset with session replay,
+quoted-ID scope, rejected private/encoded query attempts, allowed copied queries,
+and credentials in queries/filters across both HTTP and MCP paths. Existing
+live-save and owner-path tests still pass. One scripted success case now uses
+`Python`, which appears in its user request, instead of model-added `engineer`.
+
+Verification: root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
+313 passed, 24 skipped, live calls disabled. Run the new checks from the SDK
+directory with `RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_action_policy.py`.
+No live model/provider calls were made.
+
+Limits: this is conservative text policy, not intent verification or a general
+secret detector. Nested quotes and unmarked pasted instructions are not a robust trust
+boundary. Queries cannot be freely paraphrased; follow-ups
+must repeat the desired query in the current request. Private data explicitly
+included outside quotes in the current request can still become a query unless
+it matches a configured credential. Arbitrary encoded secrets already present
+in the request are not detected. Authorized recommendation prose is not grounded
+or sanitized by this change. Low-level provider/storage functions remain trusted
+Python APIs; the user-facing agent tools enforce this policy. Broader adversarial
+regression and review remain steps 6–7.
 
 ### Decision. Proceed to Lesson 9
 
