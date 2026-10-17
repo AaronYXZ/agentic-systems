@@ -493,6 +493,99 @@ No live model/provider or SDK trace-export runs were made.
 Remaining step 7: final review of both rejection paths, execution ordering,
 side effects, regression evidence, and documented limitations.
 
+### Lesson 13 progress. Human approval
+
+Steps 1–2 implemented on 2026-10-17. Lesson 12's final step-7 review remains
+open. No real application submission or paid model call is introduced.
+
+Step 1: verified installed SDK 0.23.1 locally. `function_tool(needs_approval=True)`
+produces an interruption before tool execution. `RunResult.interruptions`
+contains the pending tool call; `RunResult.to_state()` returns resumable state.
+`RunState.approve(item, always_approve=False)` and
+`RunState.reject(item, always_reject=False, rejection_message=None)` record
+trusted application decisions. `to_json`/`to_string` and
+`from_json`/`from_string` support state serialization/restoration. Serialization
+excludes tracing API keys by default (`include_tracing_api_key=False`). These
+SDK mechanisms do not establish owner/action binding, expiry, or idempotency.
+
+Step 2: added `openai_agent_sdk/tools/submit_application.py`:
+
+- `build_submission_tool(resources)` returns a standalone SDK function tool
+  with `needs_approval=True`. Its model arguments are only `job_id: str` and
+  `cover_letter: str`; owner and storage paths come from trusted resources.
+- `record_submission()` validates a nonblank cover letter of at most 8,000
+  characters and an ID from the fictional catalog. It appends a plain JSON
+  object containing only `job_id`, `cover_letter`, and `status: simulated` to
+  `data/users/<tenant>/<user>/submissions.jsonl`, already ignored by Git.
+  Ownership comes from the existing directory boundary. The function returns
+  a fixed confirmation string.
+- The tool rechecks identity and rejects extra arguments before storage.
+  Metadata-only traces use `local_submission`.
+
+Simplified at the user's request: removed `SubmissionRecord`, UUID generation,
+timestamps, duplicated owner fields, and per-submission files. Existing logs
+are appended rather than overwritten. Validation and owner-path checks remain.
+No automatic migration of earlier per-submission JSON files is performed.
+
+The tool is registered only when `build_agent(enable_submissions=True)` is
+requested with an owner and the mock provider. The normal CLI remains unchanged
+unless the user supplies `--approvals`. Direct Python storage/tool-body calls
+remain trusted operator APIs, not approval checks.
+
+`tests/test_submission.py` adds nine offline checks: a reloadable owner-scoped
+append-only log, invalid/live/unknown job IDs, invalid letters, cross-owner file
+links, SDK approval interruption and argument schema, wrong identity, and extra
+arguments. Root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
+373 passed, 29 skipped, live calls disabled. Run from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_submission.py -v`.
+
+Step 3 implemented on 2026-10-17. The CLI supports `--approvals` together
+with synthetic `--tenant`, `--user`, and a persistent `--session`, using the mock
+job provider. It registers the simulation tool on the existing job-search agent.
+The ordinary CLI model reads the user's application request and can call it.
+`request_approval()` prints the exact pending JSON arguments and accepts only
+`approve` or `reject`. Invalid responses remain pending; EOF/interruption rejects.
+
+The runner takes a trusted `approval_handler` callback, retains `RunState` in
+memory, records each decision on the pending item with no blanket approval,
+and resumes through the SDK. Missing handlers or non-boolean callback results
+fail closed. Model/tool budgets are shared across resumes; the execution-time
+budget is shared too, excluding time spent in human review. Existing ownership,
+guardrails, session recovery, and metadata-only traces remain active. Rejected
+applications produce no log entry. Conversation history survives normal approve/
+reject completion without duplicate user messages.
+
+Nine new checks in `tests/test_approval_cli.py` exercise real CLI dispatch with
+scripted models, exact argument review before writes, approve/reject/invalid
+replies, end-of-input rejection, missing-handler recovery, identity requirements,
+non-boolean callback denial, and shared tool-call budgets. Root Ruff passed;
+root pytest: 15 passed; isolated SDK pytest: 382 passed, 29 skipped. CLI help
+verified `--approvals`. No live model/provider calls were made during development.
+
+From the SDK directory, with `OPENAI_API_KEY` configured:
+
+```bash
+JOB_SEARCH_PROVIDER=mock uv run --no-sync job-agent --tenant demo --user alice --session approval-demo --approvals
+```
+
+Then enter: `Apply to job-001 with this cover letter: I built Python services.`
+Review the JSON and type `approve` or `reject`. Accepted simulations append to
+`data/users/demo/alice/submissions.jsonl`. This interactive command calls the
+configured model and may incur model charges; it never contacts employers.
+
+Remaining steps:
+
+4. Bind decisions to owner, run, tool call, immutable arguments, and expiry.
+5. Implement trusted approve/reject paths and recheck policy before resume.
+6. Persist pending state across restart and prevent duplicate execution.
+7. Test all decision, ownership, changed-argument, expiry, restart, and repeated
+   resume paths and record final exit evidence.
+
+Scope limits: JSONL records are local simulations, not an employer/provider
+integration. Expiry, durable state, exact action binding, crash-atomic writes,
+and duplicate-resume protection are not yet implemented. The append log assumes
+one trusted local writer. No live API calls were made.
+
 ### Decision. Proceed to Lesson 9
 
 2026-10-15: The user chose to skip the rest of Lesson 7b and all of Lesson 8
@@ -1242,7 +1335,7 @@ uses traces for workflow decisions and datasets for repeatable comparisons.
 
 ### Suggested next lesson
 
-Continue Lesson 12 with the step-7 final review of the guardrail work above.
+Continue Lesson 13 from step 4. Lesson 12's step-7 final review remains open.
 Lesson 11's final review remains open and its real-model evaluations unrun.
 Lesson 10 retrieval evaluations remain skipped. Keep deterministic enforcement
 evidence separate from model-quality results. Investigate the live MCP timeout

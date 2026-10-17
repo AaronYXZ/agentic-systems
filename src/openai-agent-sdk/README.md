@@ -521,3 +521,27 @@ out under the eight-second client deadline. Provider access, quota availability,
 live result differences, and cancellation have not been verified. An empty
 result does not prove that two providers use equivalent datasets. Do not declare
 live equivalence from offline fixture parity or schema discovery.
+
+
+### Human approval for simulated applications
+
+Start the interactive agent with a synthetic local identity and the mock catalog:
+
+```bash
+JOB_SEARCH_PROVIDER=mock uv run --no-sync job-agent --tenant demo --user alice --session approval-demo --approvals
+```
+
+This uses the configured `OPENAI_MODEL` and `OPENAI_API_KEY`, with normal model
+charges. Ask: `Apply to job-001 with this cover letter: I built Python services.`
+The application pauses before the submission tool executes, shows the exact job
+ID and letter as JSON, and asks for `approve` or `reject`. Only an explicit
+approval resumes that pending call. Invalid responses keep the prompt open;
+end-of-input rejects. Normal job-search commands remain available.
+
+An approved simulation appends a local record to
+`data/users/demo/alice/submissions.jsonl`. No real application is sent. Rejection
+creates no record. Pending state stays in memory; exiting before a decision does
+not provide a restartable approval. Expiry, durable approval binding, and
+idempotent recovery remain later lesson steps. Required input/output guardrails
+and tool access checks remain active. Output rejection cannot undo an application
+record that has already been written.

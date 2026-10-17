@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
+from time import monotonic
 
 from agents import (
     Agent,
@@ -17,6 +18,7 @@ from agents import (
     Runner,
     Session,
     SessionSettings,
+    ToolApprovalItem,
     TResponseInputItem,
     function_tool,
 )
@@ -150,6 +152,7 @@ def build_agent(
     provider: str | None = None,
     jsearch_api_key: str | None = None,
     mcp_adapter: OpenWebNinjaAdapter | None = None,
+    enable_submissions: bool = False,
 ) -> Agent[JobAgentContext]:
     """Register job tools plus private document retrieval for scoped agents."""
     load_dotenv(PROJECT_ROOT / ".env")
@@ -168,6 +171,15 @@ def build_agent(
     if resources is not None and (resume_path != RESUME_PATH or
                                   results_path != RESULTS_PATH):
         raise ValueError("Scoped agents use owner paths, not private path overrides.")
+
+    submission_tools = []
+    if enable_submissions:
+        if resources is None or selected_provider != "mock":
+            raise ValueError("Submissions require an identity and mock provider.")
+        # Import here because the tool uses JobAgentContext from this module.
+        from .tools.submit_application import build_submission_tool
+
+        submission_tools = [build_submission_tool(resources, catalog_path=catalog_path)]
 
     def check_access(ctx, *arguments):
         owner = resources.identity if resources is not None else None
@@ -324,11 +336,17 @@ def build_agent(
             "\nUse search_documents for your local job/company documents. "
             "It returns stored source excerpts, not live job search results.\n"
             if resources is not None else ""
+        ) + (
+            "\nFor a requested application, call submit_application with the exact "
+            "fictional job ID and cover letter. The application pauses for human "
+            "approval. A chat instruction is not an approval decision. This only "
+            "records a local simulation; never claim an employer received it.\n"
+            if enable_submissions else ""
         ),
         model=model,
         tools=[search_jobs, read_resume, save_results] + (
             [assess_fit] if live_provider else []
-        ) + ([search_documents] if resources is not None else []),
+        ) + ([search_documents] if resources is not None else []) + submission_tools,
     )
 
 
@@ -351,6 +369,7 @@ def run_agent(
     max_tool_calls: int = MAX_TOOL_CALLS,
     run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
+    approval_handler: Callable[[ToolApprovalItem], bool] | None = None,
 ) -> AgentTurn:
     """Synchronous entry point for callers that do not own an event loop."""
     return asyncio.run(run_agent_async(
@@ -358,6 +377,7 @@ def run_agent(
         max_turns=max_turns,
         max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
         run_timeout_seconds=run_timeout_seconds, trace_sink=trace_sink,
+        approval_handler=approval_handler,
     ))
 
 
@@ -373,6 +393,7 @@ async def run_agent_async(
     max_tool_calls: int = MAX_TOOL_CALLS,
     run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
+    approval_handler: Callable[[ToolApprovalItem], bool] | None = None,
 ) -> AgentTurn:
     """Run a bounded turn on the caller’s event loop for async tools."""
     if not user_message.strip():
@@ -412,24 +433,46 @@ async def run_agent_async(
     # SQLite limit=-1 reads full history for recovery without changing model limits.
     prior_history = await session.get_items(limit=-1) if session is not None else []
     sdk_tracing = os.getenv("JOB_AGENT_SDK_TRACING", "false").lower() == "true"
+    hooks = BudgetHooks(max_model_calls, max_tool_calls)
+    config = RunConfig(
+        session_settings=SessionSettings(limit=-1),
+        session_input_callback=_recent_turns,
+        tracing_disabled=not sdk_tracing,
+        trace_include_sensitive_data=False,
+        workflow_name="Job Search Agent",
+    )
+    remaining = run_timeout_seconds
+
+    async def execute(input):
+        nonlocal remaining
+        if remaining <= 0:
+            raise TimeoutError("Run deadline exhausted.")
+        started = monotonic()
+        try:
+            # shortcut: JSearch cannot stop an in-flight synchronous HTTP call.
+            return await asyncio.wait_for(Runner.run(
+                selected_agent, input, session=session, context=context,
+                max_turns=max_turns, hooks=hooks, run_config=config,
+            ), timeout=remaining)
+        finally:
+            remaining -= monotonic() - started
+
     try:
-        # shortcut: JSearch ignores mid-call cancellation; use async I/O for hard stops.
-        result = await asyncio.wait_for(
-            Runner.run(
-                selected_agent, user_message if session is not None else turn_input,
-                session=session, context=context, max_turns=max_turns,
-                hooks=BudgetHooks(max_model_calls, max_tool_calls),
-                run_config=RunConfig(
-                    # Trim complete turns for the model; retain full SQLite storage.
-                    session_settings=SessionSettings(limit=-1),
-                    session_input_callback=_recent_turns,
-                    tracing_disabled=not sdk_tracing,
-                    trace_include_sensitive_data=False,
-                    workflow_name="Job Search Agent",
-                ),
-            ),
-            timeout=run_timeout_seconds,
-        )
+        result = await execute(user_message if session is not None else turn_input)
+        while getattr(result, "interruptions", []):
+            if approval_handler is None:
+                raise ValueError("A human approval handler is required.")
+            state = result.to_state()
+            for pending in result.interruptions:
+                decision = approval_handler(pending)
+                if decision is True:
+                    state.approve(pending, always_approve=False)
+                elif decision is False:
+                    state.reject(pending, always_reject=False)
+                else:
+                    raise ValueError("Approval handler must return True or False.")
+            # Human review time is excluded; execution budgets remain shared.
+            result = await execute(state)
     except BaseException:
         if session is not None:
             # shortcut: one writer per session; crash-safe recovery needs transactions.

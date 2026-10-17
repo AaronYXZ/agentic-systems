@@ -12,7 +12,7 @@ from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
-from agents import SQLiteSession, TResponseInputItem
+from agents import SQLiteSession, ToolApprovalItem, TResponseInputItem
 from agents.exceptions import (
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
@@ -62,6 +62,24 @@ def _run_live_turn(
 def _print_trace(record: ToolTrace) -> None:
     """Print allowlisted metadata to stderr without tool content."""
     print(json.dumps(asdict(record)), file=sys.stderr)
+
+
+def request_approval(
+    pending: ToolApprovalItem, *, input_fn=input, output_fn=print,
+) -> bool:
+    """Review one exact tool call. Only an explicit approve decision permits it."""
+    if pending.raw_item.name != "submit_application":
+        return False
+    output_fn("Approval required: simulated application (no real submission).")
+    output_fn(json.dumps(json.loads(pending.raw_item.arguments), indent=2))
+    while True:
+        try:
+            decision = input_fn("Type approve or reject: ").strip().casefold()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if decision in {"approve", "reject"}:
+            return decision == "approve"
+        output_fn("Enter approve or reject. Nothing has been submitted.")
 
 
 def run_cli(
@@ -167,6 +185,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--session-db", type=Path, help="SQLite database path")
     parser.add_argument("--tenant", help="Synthetic local tenant ID")
     parser.add_argument("--user", help="Synthetic local user ID (not authentication)")
+    parser.add_argument("--approvals", action="store_true",
+                        help="Enable human-approved local application simulations")
     args = parser.parse_args(argv)
     if args.session is not None and not args.session.strip():
         parser.error("--session must not be blank")
@@ -182,7 +202,12 @@ def main(argv: list[str] | None = None) -> None:
             resources = UserResources(Identity(args.tenant, args.user))
         except ValueError as error:
             parser.error(str(error))
+    if args.approvals and resources is None:
+        parser.error("--approvals requires --tenant, --user, and --session")
     load_dotenv(PROJECT_ROOT / ".env")
+    if (args.approvals and
+            os.getenv("JOB_SEARCH_PROVIDER", "mock").strip().lower() != "mock"):
+        parser.error("--approvals requires JOB_SEARCH_PROVIDER=mock")
     db_path = args.session_db or PROJECT_ROOT / "data" / "conversations.sqlite3"
     try:
         if resources is not None:
@@ -196,6 +221,24 @@ def main(argv: list[str] | None = None) -> None:
         with manager as session:
             if session is not None:
                 print(f"Conversation: {args.session} | Database: {db_path.resolve()}")
+            if args.approvals:
+                if not os.getenv("OPENAI_API_KEY", "").strip():
+                    raise ConfigurationError("Set OPENAI_API_KEY in .env.")
+                agent = build_agent(resources=resources, provider="mock",
+                                    enable_submissions=True)
+
+                async def approved_turn(message, history):
+                    return await run_agent_async(
+                        message, session=session, identity=resources.identity,
+                        agent=agent, approval_handler=partial(
+                            request_approval, input_fn=input, output_fn=print),
+                        trace_sink=(_print_trace if os.getenv(
+                            "JOB_AGENT_LOCAL_TRACING", "false").lower() == "true"
+                            else None),
+                    )
+
+                asyncio.run(_run_cli_loop(input, print, approved_turn, persistent=True))
+                return
             if os.getenv("JOB_SEARCH_PROVIDER", "mock").strip().lower() != "mcp":
                 if session is None:
                     run_cli()

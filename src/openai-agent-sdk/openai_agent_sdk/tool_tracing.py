@@ -10,7 +10,8 @@ from agents.tool_context import ToolContext
 
 TraceSource = Literal[
     "mock", "jsearch", "mcp", "unknown",
-    "local_resume", "local_results", "local_matching", "local_documents"
+    "local_resume", "local_results", "local_matching", "local_documents",
+    "local_submission"
 ]
 
 
