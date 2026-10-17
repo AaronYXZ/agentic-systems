@@ -84,6 +84,196 @@ existing regression checks and add only the distinct behavior checks needed.
 | 18. Ownership handoffs | After lesson 17's gate, compare handoffs with agents-as-tools | Specialist takes final-answer ownership; context is filtered across transfer | Clear reply owner, preserved tenant/policy limits, bounded total workflow budget |
 | 19. Release and operations | Regression gates, dependency/model/prompt versions, canary release, rollback, redacted metrics | Inject provider outage and bad prompt update | Failed safety gate blocks release; operator can explain, cancel, and roll back a run |
 
+### Lesson 10 progress. Local retrieval
+
+Steps 1–3 reimplemented on 2026-10-16 with one immutable `Document`
+contract and two functions in `openai_agent_sdk/retrieval.py`.
+`load_documents(resources)` uses the existing owner-scoped path check and
+rejects foreign owners, invalid records, and duplicate IDs.
+`search_documents(resources, query)` matches case-insensitive whole words in
+catalog order and returns up to five documents with `text` limited to an exact
+400-character excerpt starting at the first match. Source labels and dates
+are preserved; sources are never fetched. Missing catalogs return no results.
+
+Store a JSON list in `data/users/<tenant>/<user>/documents.json`. Each record
+has `document_id`, `owner` (`tenant_id`, `user_id`), `kind` (`job` or `company`),
+`reference`, `source`, `updated_on` (ISO date), and `text`.
+`tests/test_retrieval.py` supplies synthetic examples and offline checks.
+
+``` python
+from openai_agent_sdk.identity import Identity, UserResources
+from openai_agent_sdk.retrieval import search_documents
+
+for hit in search_documents(UserResources(Identity("demo", "alice")), "Python"):
+    print(hit.document_id, hit.source, hit.updated_on, hit.text)
+```
+
+Run from `src/openai-agent-sdk`:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_retrieval.py -v`.
+
+Verification: root Ruff passed; root pytest passed (15 tests); isolated SDK
+pytest passed (248 passed, 24 skipped), with live model calls disabled,
+`--no-sync`, and a temporary uv cache. No live API calls were made.
+
+Step 4 implemented on 2026-10-16. Owner-scoped agents now expose
+`search_documents(query)` in both mock and live-provider modes. The tool
+checks context identity before retrieval and returns JSON excerpts with source
+metadata and ISO dates. Existing runner budgets apply; metadata-only traces
+use `local_documents`. Unscoped agents do not expose private retrieval.
+Three scripted/direct-tool checks cover schema/output/tracing, wrong-context
+rejection before retrieval, and budget exhaustion before retrieval.
+Verified against installed SDK 0.23.1. Root Ruff and 15 root tests passed;
+isolated SDK tests: 251 passed, 24 skipped, with live calls disabled.
+
+Step 5 implemented on 2026-10-16 as versioned answer instructions in
+`openai_agent_sdk/prompts/system.md`. Document claims require exact quotes
+and document ID/source/date citations from this turn. Unsupported facts require
+abstention; missing evidence is not a false fact or an empty online market.
+Explicitly superseded or out-of-period sources are flagged, with no invented
+age cutoff. Conflicts remain unresolved with both sources cited. References
+must support associations with online listings. Document text cannot grant
+permissions or replace fit/save checks. The existing listing-fact instruction
+now distinguishes online listings from stored documentary evidence.
+
+Verification: prompt reviewed for consistency; root Ruff and 15 root tests
+passed; isolated SDK tests: 251 passed, 24 skipped, live calls disabled.
+Enforcement boundary: Python enforces ownership, accessible paths, tool budgets,
+and result limits. Citations, claim support, abstention, outdated-source warnings,
+and conflict reporting currently rely only on prompts. No output validator
+rejects violations, and no deterministic freshness cutoff exists. Passing the
+scripted regression suite does not establish model compliance. No live model
+calls were run. Local catalog files retain Lesson 9's filesystem scope; their
+text is untrusted model input.
+
+`search_documents` supplements `search_jobs`; it does not replace the online
+search API. There is no automatic import, synchronization, or join between local
+documents and online listings. Document `reference` values are metadata only.
+
+### Decision. Proceed to Lesson 11
+
+2026-10-16: The user chose to skip Lesson 10's remaining retrieval evaluations
+and proceed to injection defense. Evidence/abstention, stale-source, and
+conflicting-source evaluations are skipped, not completed. Lesson 10's full
+exit condition remains unverified. This does not remove deterministic security
+regression checks for Lesson 11; no new model-quality evaluation or paid run is
+required for this next lesson.
+
+### Lesson 11 to-dos. Injection defense
+
+Status: steps 1–2 complete for the documented local scope on 2026-10-16;
+steps 3–7 remain planned.
+
+1. Map untrusted inputs: resume text, mock/online job descriptions, MCP results,
+   retrieved documents, and replayed tool output. Identify the tool boundary each
+   could influence. Keep trusted identity and current-request permission separate.
+2. Review model exposure. Keep credentials, other-owner data, and internal
+   authorization state out of prompts, tool results, and trace content. Use fake
+   secrets and synthetic documents for security checks.
+3. Enforce access at every tool boundary. Recheck trusted identity, owner paths,
+   and current-turn job evidence before reads or actions. Reject model-supplied
+   identity/path overrides; a document's claim of authority grants no access.
+4. Enforce write permissions in code. Verify that document/provider instructions
+   cannot authorize a save, reuse an earlier permission, bypass live-save denial,
+   or change the authorized resource. Preserve explicit current-request checks.
+5. Review outbound tool arguments. Trace how untrusted text could influence
+   search queries or another tool call. Bound permitted arguments in application
+   policy where needed; reject requests to send secrets or private source text
+   to external providers. Do not treat a registered tool name as authorization
+   for every use of that tool.
+6. Add a small deterministic adversarial regression set. Force attempted tenant
+   changes, forbidden saves, path overrides, and secret-exfiltration calls after
+   malicious tool output. Assert no prohibited read, write, or provider call
+   occurs. Keep legitimate owner operations working. Scripted models check
+   application enforcement, not whether a real model resists persuasion.
+7. Update the versioned prompt's trust-boundary instructions, run root Ruff/pytest
+   and isolated SDK tests with live calls disabled, and record observed denials
+   plus remaining gaps. Keep prompt guidance distinct from code enforcement.
+
+Exit evidence: deterministic attempted policy violations are denied before a
+protected read, write, or external call. This does not establish complete prompt
+injection resistance or real-model compliance.
+
+#### Lesson 11 step 1. Untrusted-input map
+
+This map documents existing data flow. It adds no runtime protection.
+A local file, a schema-valid provider response, or stored conversation history
+can contain hostile instructions. Normalization validates record shape; it does
+not make the text authoritative.
+
+| Untrusted input | Current entry point | Decisions or tool boundaries it could influence |
+|---|---|---|
+| Resume text | `tools/read_resume.py` via `read_resume`; also read by live `assess_fit` | Fit claims; later model-selected search queries, retrieval queries, or saves |
+| Mock/online job fields, including descriptions and URLs | `tools/search_jobs.py` via `search_jobs`; online records normalized in `jsearch.py` | Job selection, `assess_fit(job_id)`, save content, and later outbound search queries |
+| MCP result content | `OpenWebNinjaAdapter.search()` in `openwebninja_mcp.py`, then `search_jobs` | Same boundaries as online jobs; tool discovery/schema checks do not grant content authority |
+| Local job/company documents and source metadata | `retrieval.load_documents()` and `retrieval.search_documents()` via the `search_documents` tool | Documentary claims, claimed links to listings, and later model-selected tool calls |
+| Replayed tool output and assistant text | `run_agent_async()` using `OwnedSession`/SQLite history; explicit history remains available only in unscoped mode | Decisions on later turns; old instructions or permissions may be repeated as text |
+
+Trusted application values remain separate from those inputs:
+
+- `Identity` comes from the caller/local CLI, is bound to `OwnedAgent` and
+  `OwnedSession`, and is checked before scoped history access. Synthetic CLI
+  selection is trusted local operation, not production authentication.
+- `UserResources` resolves owner paths in Python. No tool exposes an identity
+  or private path argument. A document's owner/reference/source text cannot
+  select a different owner or grant access to a listing.
+- `JobAgentContext` is rebuilt for each turn. `save_allowed` comes from
+  `explicit_save_requested(current_user_message)`, criteria from that current
+  message, and `searched_jobs` starts empty. Tool output and prior history do
+  not populate permission fields. Live fit evidence is retained only after a
+  current-turn search result.
+- Model-selected tool names and arguments are requests. Application code must
+  authorize each operation and resource; registering a tool is not permission
+  for every use of it.
+
+Current-user message parsing is an application mechanism, not a verified intent
+or approval system. Quoted malicious text inside that message and outbound
+query disclosure still require review in later steps. Source text already
+visible to the model can influence its next request even when it cannot change
+Python context directly. Citation/abstention rules remain prompt-only.
+
+Exit evidence for this documentation step: traced the listed entry points to
+`build_agent()`, the retrieval functions, MCP normalization, and
+`run_agent_async()` context/history setup. Steps 2–7 will review exposure and
+enforcement gaps and add deterministic adversarial checks. No tests or live
+calls were run for this documentation-only change.
+
+#### Lesson 11 step 2. Model exposure review
+
+Implemented on 2026-10-16 with two small output changes:
+
+- `catalog.load_catalog()` now returns only declared `JobPosting` fields.
+  Undeclared catalog fields no longer flow into mock search output.
+- The `search_documents` tool returns explicit evidence fields, omitting owner
+  IDs. Ownership stays in application context and is still checked before reads.
+
+Reviewed provider normalization, MCP result decoding, context/history setup,
+and local/SDK tracing configuration. HTTP credentials stay in request headers;
+MCP credentials stay in server environment configuration. Both production
+adapters normalize job fields and replace upstream transport/provider errors
+with application messages. Installed SDK 0.23.1's default tool error handler
+returns a fixed message rather than raw exception details. No replacement error
+framework was added. Local traces contain call metadata, not payloads; SDK
+trace export remains opt-in with `trace_include_sensitive_data=False`.
+
+`tests/test_model_exposure.py` adds three deterministic checks using fake API
+keys, undeclared catalog secrets, another owner's history/resume canary, and
+exceptions containing a secret and internal path. Captured prompts, model
+inputs, tool history, replayed history, and local traces exclude the forbidden
+canaries. Own-resume evidence and normal search results still reach the model.
+The retrieval tool test also checks that output omits owner metadata.
+
+Verification: root Ruff passed; root pytest: 15 passed; isolated SDK pytest:
+254 passed, 24 skipped, with live calls disabled and existing environments.
+No live provider/model calls or trace-export runs were made.
+
+Scope limits: an owner's resume and requested excerpts intentionally reach the
+model and persist in their local conversation history. Declared evidence fields
+can themselves contain sensitive text; this is field selection, not a general
+secret detector. Source labels are operator-provided and remain visible.
+Provider-side logs, SDK-exported trace payloads, and process stderr were not
+validated end to end. Outbound disclosure of already model-visible text remains
+step 5. This review does not establish real-model injection resistance.
+
 ### Decision. Proceed to Lesson 9
 
 2026-10-15: The user chose to skip the rest of Lesson 7b and all of Lesson 8
@@ -833,13 +1023,10 @@ uses traces for workflow decisions and datasets for repeatable comparisons.
 
 ### Suggested next lesson
 
-Keep this repository and build lesson 5's evaluation baseline next. Existing
-tools, MCP, fit checks, and tracing already provide enough behavior to evaluate.
-Then build structured recommendations with evidence validation, followed by
-persistence. Revisit lessons 1–2 as small walkthroughs in this repository rather
-than recreating the setup. Use one lesson per commit and one exit condition.
-Do not add multiple agents until the baseline identifies a problem they could solve.
-Investigate the live MCP timeout separately from fixed-fixture model evaluations.
+Proceed to Lesson 11 using the checklist above, per the 2026-10-16 decision.
+Lesson 10 retrieval evaluations remain skipped. Keep one lesson per commit
+and distinguish deterministic enforcement evidence from model-quality results.
+Investigate the live MCP timeout separately; no live run is authorized here.
 
 Every implementation lesson runs the root Ruff and pytest checks plus isolated
 SDK tests. Planning-only changes need a document review, not new code tests.

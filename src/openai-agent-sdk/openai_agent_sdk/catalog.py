@@ -35,4 +35,7 @@ def load_catalog(path: Path) -> list[JobPosting] | None:
             return None
         seen_ids.add(record["id"])
 
-    return cast(list[JobPosting], records)
+    return cast(list[JobPosting], [
+        {key: record[key] for key in (*required_text, "skills")}
+        for record in records
+    ])

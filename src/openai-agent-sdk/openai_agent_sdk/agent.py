@@ -36,6 +36,7 @@ from .identity import Identity, OwnedSession, UserResources
 from .jsearch import JSearchError
 from .matching import assess_fit as assess_live_fit
 from .openwebninja_mcp import OpenWebNinjaAdapter
+from .retrieval import search_documents as search_document_records
 from .tool_tracing import ToolTrace, traced_call, traced_call_async
 from .tools import read_resume as read_resume_file
 from .tools import save_results as save_results_file
@@ -136,7 +137,7 @@ def build_agent(
     jsearch_api_key: str | None = None,
     mcp_adapter: OpenWebNinjaAdapter | None = None,
 ) -> Agent[JobAgentContext]:
-    """Register three mock tools or four tools for opt-in JSearch search."""
+    """Register job tools plus private document retrieval for scoped agents."""
     load_dotenv(PROJECT_ROOT / ".env")
     if model is None:
         model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
@@ -209,6 +210,23 @@ def build_agent(
         )
 
     @function_tool
+    def search_documents(ctx: ToolContext[JobAgentContext], query: str) -> str:
+        """Search your local job/company documents and return source excerpts."""
+        def operation() -> str:
+            if resources is None or ctx.context.identity != resources.identity:
+                raise PermissionError("Document access denied.")
+            return json.dumps([
+                {
+                    "document_id": doc.document_id, "kind": doc.kind,
+                    "reference": doc.reference, "source": doc.source,
+                    "updated_on": doc.updated_on.isoformat(), "text": doc.text,
+                }
+                for doc in search_document_records(resources, query)
+            ], ensure_ascii=False)
+
+        return traced_call(ctx, source="local_documents", operation=operation)
+
+    @function_tool
     def read_resume(ctx: ToolContext[JobAgentContext]) -> str:
         """Read the candidate's local resume for specific experience evidence."""
         return traced_call(
@@ -265,11 +283,15 @@ def build_agent(
             "covers checked skills only, not the whole job. Saving live jobs "
             "is not supported yet.\n"
             if live_provider else ""
+        ) + (
+            "\nUse search_documents for your local job/company documents. "
+            "It returns stored source excerpts, not live job search results.\n"
+            if resources is not None else ""
         ),
         model=model,
         tools=[search_jobs, read_resume, save_results] + (
             [assess_fit] if live_provider else []
-        ),
+        ) + ([search_documents] if resources is not None else []),
     )
 
 
