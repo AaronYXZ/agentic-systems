@@ -47,6 +47,11 @@ def build_submission_tool(
                 raise PermissionError("Submission access denied.")
             if set(json.loads(ctx.tool_arguments or "{}")) - {"job_id", "cover_letter"}:
                 raise PermissionError("Unexpected tool arguments.")
+            approval = ctx.context.approved_actions.pop(ctx.tool_call_id, None)
+            if approval is None:
+                raise PermissionError("Submission requires an application approval.")
+            approval.check(ctx.context.identity, ctx.context.run_id, ctx.tool_call_id,
+                           ctx.tool_name, ctx.tool_arguments)
             return record_submission(resources, job_id, cover_letter,
                                      catalog_path=catalog_path)
 

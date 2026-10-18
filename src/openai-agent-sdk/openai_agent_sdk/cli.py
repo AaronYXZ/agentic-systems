@@ -11,8 +11,9 @@ from contextlib import closing, nullcontext
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+from time import monotonic
 
-from agents import SQLiteSession, ToolApprovalItem, TResponseInputItem
+from agents import SQLiteSession, TResponseInputItem
 from agents.exceptions import (
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
@@ -26,6 +27,7 @@ from openai_agent_sdk.agent import (
     run_agent,
     run_agent_async,
 )
+from openai_agent_sdk.approvals import ApprovalDecision, ApprovalError, ApprovalRequest
 from openai_agent_sdk.contracts import PROJECT_ROOT
 from openai_agent_sdk.filtering import CriteriaError
 from openai_agent_sdk.identity import Identity, UserResources
@@ -65,20 +67,22 @@ def _print_trace(record: ToolTrace) -> None:
 
 
 def request_approval(
-    pending: ToolApprovalItem, *, input_fn=input, output_fn=print,
-) -> bool:
+    pending: ApprovalRequest, *, input_fn=input, output_fn=print,
+) -> ApprovalDecision:
     """Review one exact tool call. Only an explicit approve decision permits it."""
-    if pending.raw_item.name != "submit_application":
-        return False
+    if pending.tool_name != "submit_application":
+        return ApprovalDecision(pending, False)
     output_fn("Approval required: simulated application (no real submission).")
-    output_fn(json.dumps(json.loads(pending.raw_item.arguments), indent=2))
+    output_fn(f"Owner: {pending.identity.tenant_id}/{pending.identity.user_id}")
+    output_fn(f"Expires in {max(0, int(pending.expires_at - monotonic()))} seconds.")
+    output_fn(json.dumps(json.loads(pending.arguments), indent=2))
     while True:
         try:
             decision = input_fn("Type approve or reject: ").strip().casefold()
         except (EOFError, KeyboardInterrupt):
-            return False
+            return ApprovalDecision(pending, False)
         if decision in {"approve", "reject"}:
-            return decision == "approve"
+            return ApprovalDecision(pending, decision == "approve")
         output_fn("Enter approve or reject. Nothing has been submitted.")
 
 
@@ -128,6 +132,9 @@ async def _run_cli_loop(
                     "Agent > Response withheld by policy. "
                     "Earlier tool actions may already have completed."
                 )
+                continue
+            except ApprovalError as error:
+                output_fn(f"Agent > {error}")
                 continue
             except PermissionError:
                 output_fn(

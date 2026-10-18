@@ -7,8 +7,10 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.resources import files
+from math import isfinite
 from pathlib import Path
 from time import monotonic
+from uuid import uuid4
 
 from agents import (
     Agent,
@@ -18,7 +20,6 @@ from agents import (
     Runner,
     Session,
     SessionSettings,
-    ToolApprovalItem,
     TResponseInputItem,
     function_tool,
 )
@@ -26,6 +27,13 @@ from agents.exceptions import AgentsException
 from agents.tool_context import ToolContext
 from dotenv import load_dotenv
 
+from .approvals import (
+    APPROVAL_TIMEOUT_SECONDS,
+    ApprovalDecision,
+    ApprovalError,
+    ApprovalRequest,
+    canonical_arguments,
+)
 from .contracts import (
     JOBS_PATH,
     PROJECT_ROOT,
@@ -74,6 +82,8 @@ class JobAgentContext:
     request_text: str = ""
     save_job_ids: frozenset[str] | None = None
     identity: Identity | None = None
+    run_id: str = field(default_factory=lambda: uuid4().hex)
+    approved_actions: dict[str, ApprovalRequest] = field(default_factory=dict)
     criteria: SearchCriteria = SearchCriteria()
     searched_jobs: dict[str, LiveJobPosting] = field(default_factory=dict)
     tool_traces: list[ToolTrace] = field(default_factory=list)
@@ -369,7 +379,8 @@ def run_agent(
     max_tool_calls: int = MAX_TOOL_CALLS,
     run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
-    approval_handler: Callable[[ToolApprovalItem], bool] | None = None,
+    approval_handler: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
+    approval_timeout_seconds: float = APPROVAL_TIMEOUT_SECONDS,
 ) -> AgentTurn:
     """Synchronous entry point for callers that do not own an event loop."""
     return asyncio.run(run_agent_async(
@@ -378,6 +389,7 @@ def run_agent(
         max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
         run_timeout_seconds=run_timeout_seconds, trace_sink=trace_sink,
         approval_handler=approval_handler,
+        approval_timeout_seconds=approval_timeout_seconds,
     ))
 
 
@@ -393,7 +405,8 @@ async def run_agent_async(
     max_tool_calls: int = MAX_TOOL_CALLS,
     run_timeout_seconds: float = RUN_TIMEOUT_SECONDS,
     trace_sink: Callable[[ToolTrace], None] | None = None,
-    approval_handler: Callable[[ToolApprovalItem], bool] | None = None,
+    approval_handler: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
+    approval_timeout_seconds: float = APPROVAL_TIMEOUT_SECONDS,
 ) -> AgentTurn:
     """Run a bounded turn on the caller’s event loop for async tools."""
     if not user_message.strip():
@@ -402,6 +415,9 @@ async def run_agent_async(
         raise ValueError("max_turns must be at least 1.")
     if max_model_calls < 1 or max_tool_calls < 1 or run_timeout_seconds <= 0:
         raise ValueError("Run budgets must be positive.")
+
+    if not isfinite(approval_timeout_seconds) or approval_timeout_seconds <= 0:
+        raise ValueError("Approval timeout must be finite and positive.")
 
     if session is not None and history:
         raise ValueError("Use session or explicit history, not both.")
@@ -462,15 +478,34 @@ async def run_agent_async(
         while getattr(result, "interruptions", []):
             if approval_handler is None:
                 raise ValueError("A human approval handler is required.")
+            if identity is None:
+                raise ApprovalError("Approval requires an owner-scoped identity.")
             state = result.to_state()
-            for pending in result.interruptions:
-                decision = approval_handler(pending)
-                if decision is True:
+            reviews = [
+                (pending, ApprovalRequest(
+                    identity=identity, run_id=context.run_id,
+                    call_id=pending.raw_item.call_id, tool_name=pending.raw_item.name,
+                    arguments=canonical_arguments(pending.raw_item.arguments),
+                    expires_at=monotonic() + approval_timeout_seconds,
+                )) for pending in result.interruptions
+            ]
+            for pending, request in reviews:
+                decision = approval_handler(request)
+                if (not isinstance(decision, ApprovalDecision) or
+                        decision.request != request or
+                        type(decision.approved) is not bool):
+                    raise ApprovalError(
+                        "Decision must match the pending approval request. "
+                        "Request a fresh review."
+                    )
+                request.check(context.identity, context.run_id,
+                              pending.raw_item.call_id, pending.raw_item.name,
+                              pending.raw_item.arguments)
+                if decision.approved:
                     state.approve(pending, always_approve=False)
-                elif decision is False:
-                    state.reject(pending, always_reject=False)
+                    context.approved_actions[request.call_id] = request
                 else:
-                    raise ValueError("Approval handler must return True or False.")
+                    state.reject(pending, always_reject=False)
             # Human review time is excluded; execution budgets remain shared.
             result = await execute(state)
     except BaseException:

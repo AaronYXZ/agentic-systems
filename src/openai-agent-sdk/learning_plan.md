@@ -548,8 +548,8 @@ The ordinary CLI model reads the user's application request and can call it.
 
 The runner takes a trusted `approval_handler` callback, retains `RunState` in
 memory, records each decision on the pending item with no blanket approval,
-and resumes through the SDK. Missing handlers or non-boolean callback results
-fail closed. Model/tool budgets are shared across resumes; the execution-time
+and resumes through the SDK. Step 4 strengthens this callback from a boolean
+to a decision bound to an immutable review request. Invalid decisions fail closed. Model/tool budgets are shared across resumes; the execution-time
 budget is shared too, excluding time spent in human review. Existing ownership,
 guardrails, session recovery, and metadata-only traces remain active. Rejected
 applications produce no log entry. Conversation history survives normal approve/
@@ -573,17 +573,48 @@ Review the JSON and type `approve` or `reject`. Accepted simulations append to
 `data/users/demo/alice/submissions.jsonl`. This interactive command calls the
 configured model and may incur model charges; it never contacts employers.
 
+Step 4 implemented on 2026-10-17 after committing steps 1–3 as `9950332`.
+`approvals.py` defines immutable `ApprovalRequest` and `ApprovalDecision`
+records. Requests bind trusted identity, a fresh per-turn run ID, SDK call ID,
+tool name, canonical JSON arguments, and a monotonic expiry deadline. Canonical
+JSON normalizes key ordering/formatting while preserving argument values such
+as exact cover-letter text. Decisions must reference the exact review request
+and contain a boolean decision; altered fields and cross-run reuse fail closed.
+
+Default review lifetime is 300 seconds, configurable through the runner's
+`approval_timeout_seconds` argument. Nonpositive/nonfinite lifetimes are rejected.
+All calls in an interruption batch get their deadlines before review starts.
+The runner verifies the current pending action before issuing an in-memory grant.
+The submission tool consumes the matching call grant and rechecks owner, run,
+call, tool, arguments, and expiry immediately before storage. SDK approval alone
+is insufficient. This closes the gap between reviewing and executing an action.
+
+The CLI displays owner, remaining lifetime, and the proposed arguments, and
+returns a bound decision. Expired or changed approvals show a fixed error and
+require a fresh request/review. Expiry is checked on decision/execution; there
+is no background timer interrupting terminal input. Rejection or errors do not
+produce a submission record, and session recovery still preserves prior history.
+
+`tests/test_approval_binding.py` adds 19 deterministic checks: altered owner/
+tenant/run/call/tool/arguments/deadline, frozen review data, old-decision reuse,
+expiry with history recovery, execution-time invalid/missing grants, direct SDK
+approval bypass denial, and invalid lifetime configuration. Existing CLI approve/
+reject tests now return bound decisions. Root Ruff passed; root pytest: 15 passed;
+isolated SDK pytest: 401 passed, 29 skipped, live calls disabled. No live API
+calls were made. Run from the SDK directory:
+`RUN_LIVE_AGENT_EVAL=0 uv run pytest tests/test_approval_binding.py tests/test_approval_cli.py -v`.
+
 Remaining steps:
 
-4. Bind decisions to owner, run, tool call, immutable arguments, and expiry.
-5. Implement trusted approve/reject paths and recheck policy before resume.
+5. Review trusted approve/reject paths and policy rechecks for remaining gaps.
 6. Persist pending state across restart and prevent duplicate execution.
 7. Test all decision, ownership, changed-argument, expiry, restart, and repeated
    resume paths and record final exit evidence.
 
 Scope limits: JSONL records are local simulations, not an employer/provider
-integration. Expiry, durable state, exact action binding, crash-atomic writes,
-and duplicate-resume protection are not yet implemented. The append log assumes
+integration. Expiry and action binding are enforced in memory. Durable state,
+crash-atomic writes, and duplicate-resume protection across restarts are not
+implemented. The append log assumes
 one trusted local writer. No live API calls were made.
 
 ### Decision. Proceed to Lesson 9
@@ -1335,7 +1366,7 @@ uses traces for workflow decisions and datasets for repeatable comparisons.
 
 ### Suggested next lesson
 
-Continue Lesson 13 from step 4. Lesson 12's step-7 final review remains open.
+Continue Lesson 13 from step 5. Lesson 12's step-7 final review remains open.
 Lesson 11's final review remains open and its real-model evaluations unrun.
 Lesson 10 retrieval evaluations remain skipped. Keep deterministic enforcement
 evidence separate from model-quality results. Investigate the live MCP timeout

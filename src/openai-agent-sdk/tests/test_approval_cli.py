@@ -7,6 +7,7 @@ from contextlib import closing
 import pytest
 from openai_agent_sdk import cli
 from openai_agent_sdk.agent import RunBudgetExceeded, build_agent, run_agent
+from openai_agent_sdk.approvals import ApprovalDecision, ApprovalError
 from openai_agent_sdk.identity import Identity, UserResources
 from test_agent import ScriptedModel, _answer, _call
 
@@ -75,7 +76,8 @@ def test_tool_budget_is_shared_across_approval_resumes(tmp_path, monkeypatch):
     model = ScriptedModel([[submission()], [submission("job-002", "second")]])
     with pytest.raises(RunBudgetExceeded):
         run_agent("Apply to job-001 and job-002", identity=owner.identity,
-                  max_tool_calls=1, approval_handler=lambda pending: True,
+                  max_tool_calls=1,
+                  approval_handler=lambda pending: ApprovalDecision(pending, True),
                   agent=build_agent(model=model, provider="mock", resources=owner,
                                     enable_submissions=True))
     records = owner.file("submissions.jsonl").read_text().splitlines()
@@ -111,7 +113,7 @@ def test_approval_cli_requires_identity(arguments):
 def test_non_boolean_decision_cannot_approve(tmp_path, monkeypatch):
     monkeypatch.setenv("JOB_AGENT_SDK_TRACING", "false")
     owner = UserResources(Identity("demo", "alice"), tmp_path)
-    with pytest.raises(ValueError, match="True or False"):
+    with pytest.raises(ApprovalError, match="pending approval request"):
         run_agent("Apply to job-001", identity=owner.identity,
                   approval_handler=lambda pending: "approve",
                   agent=build_agent(model=ScriptedModel([[submission()]]),

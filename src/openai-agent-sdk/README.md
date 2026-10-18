@@ -540,8 +540,11 @@ end-of-input rejects. Normal job-search commands remain available.
 
 An approved simulation appends a local record to
 `data/users/demo/alice/submissions.jsonl`. No real application is sent. Rejection
-creates no record. Pending state stays in memory; exiting before a decision does
-not provide a restartable approval. Expiry, durable approval binding, and
-idempotent recovery remain later lesson steps. Required input/output guardrails
+creates no record. A review expires after five minutes by default and is bound
+to the selected owner, run, tool call, and exact argument values. Changed or
+expired reviews require a fresh request. Expiry is checked when deciding and
+executing; it does not interrupt terminal input with a background timer.
+Pending state stays in memory; exiting before a decision does not provide a
+restartable approval. Durable state and idempotent recovery remain later steps. Required input/output guardrails
 and tool access checks remain active. Output rejection cannot undo an application
 record that has already been written.
